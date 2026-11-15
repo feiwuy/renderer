@@ -24,14 +24,22 @@ pub struct Framebuffer {
     pub pixels: Vec<u8>,
     /// 异步回读用的双 PBO：CPU 不再等 GPU 把这一帧画完
     pbo: [gl::types::GLuint; 2],
+    /// 下一次请求写哪个 PBO（写完就翻转，因此它也指向"上一次写过的那个"的反面）
     pbo_write: usize,
-    pbo_pending: bool,
-    pbo_fence: gl::types::GLsync,
-    pbo_requests: u64,
+    /// 每个 PBO 各自那次拷贝的 fence。必须分开追踪：只等最新那个 fence 会误判
+    /// （它永远刚发出、尚未 signal，于是每帧都读不到数据 → 一直黑屏）
+    pbo_fence: [gl::types::GLsync; 2],
+    /// 该 PBO 是否已经被写过（首帧没有"上一帧"可读）
+    pbo_written: [bool; 2],
+    /// 连续多少帧没等到异步结果；超过阈值自动退回同步回读
+    pbo_skips: u32,
     pbo_enabled: bool,
 }
 
 impl Framebuffer {
+    /// 异步回读连续这么多帧读不到结果就退回同步路径（24fps 下约 2.5 秒）
+    const PBO_READY_LIMIT: u32 = 60;
+
     pub fn new(_ctx: &context::Context, depth: bool, dims: (i32, i32), offsets: (i32, i32)) -> Self {
         let (w, h) = dims;
         let mut tex: gl::types::GLuint = 0;
@@ -79,8 +87,13 @@ impl Framebuffer {
         let pixels_len = (w * h * 4) as usize;
         let pixels = vec![0; pixels_len];
         // 双 PBO：本帧把颜色纹理拷进 pbo[0]/pbo[1]（不阻塞），下一帧再映射读出来。
-        // COLONQ_PBO=0 可退回旧的同步 readback 路径。
-        let pbo_enabled = utils::env_flag("COLONQ_PBO", true);
+        //
+        // 默认**关闭**：同步路径（glGetTextureImage）在任何驱动上都稳定，异步路径
+        // 需要真 GPU 才看得出收益，且驱动兼容性不确定。想试就设 COLONQ_PBO=1，
+        // 若连续若干帧等不到结果会自动退回同步回读，不会卡在黑屏。
+        let pbo_enabled = utils::env_flag("COLONQ_PBO", false);
+        log::info!("像素回读方式: {}（COLONQ_PBO=1 可开启异步双 PBO）",
+                   if pbo_enabled { "异步双 PBO" } else { "同步 glGetTextureImage" });
         let mut pbo: [gl::types::GLuint; 2] = [0, 0];
         if pbo_enabled {
             unsafe {
@@ -102,9 +115,9 @@ impl Framebuffer {
             pixels_len,
             pbo,
             pbo_write: 0,
-            pbo_pending: false,
-            pbo_fence: std::ptr::null(),
-            pbo_requests: 0,
+            pbo_fence: [std::ptr::null(), std::ptr::null()],
+            pbo_written: [false, false],
+            pbo_skips: 0,
             pbo_enabled,
         }
     }
@@ -121,9 +134,9 @@ impl Framebuffer {
             pixels,
             pbo: [0, 0],
             pbo_write: 0,
-            pbo_pending: false,
-            pbo_fence: std::ptr::null(),
-            pbo_requests: 0,
+            pbo_fence: [std::ptr::null(), std::ptr::null()],
+            pbo_written: [false, false],
+            pbo_skips: 0,
             pbo_enabled: false,
         }
     }
@@ -139,9 +152,9 @@ impl Framebuffer {
         self.pixels = nf.pixels;
         self.pbo = nf.pbo;
         self.pbo_write = nf.pbo_write;
-        self.pbo_pending = nf.pbo_pending;
         self.pbo_fence = nf.pbo_fence;
-        self.pbo_requests = nf.pbo_requests;
+        self.pbo_written = nf.pbo_written;
+        self.pbo_skips = nf.pbo_skips;
         self.pbo_enabled = nf.pbo_enabled;
     }
 
@@ -211,46 +224,58 @@ impl Framebuffer {
             self.populate_pixels();
             return;
         }
+        let w = self.pbo_write;
         unsafe {
-            gl::BindBuffer(gl::PIXEL_PACK_BUFFER, self.pbo[self.pbo_write]);
+            gl::BindBuffer(gl::PIXEL_PACK_BUFFER, self.pbo[w]);
             // 末参数为 NULL 表示"拷进当前绑定的 PBO"
             gl::GetTextureImage(self.tex, 0, gl::RGBA, gl::UNSIGNED_BYTE,
                                 self.pixels_len as _, std::ptr::null_mut());
             gl::BindBuffer(gl::PIXEL_PACK_BUFFER, 0);
-            if !self.pbo_fence.is_null() {
-                gl::DeleteSync(self.pbo_fence);
+            if !self.pbo_fence[w].is_null() {
+                gl::DeleteSync(self.pbo_fence[w]);
             }
-            self.pbo_fence = gl::FenceSync(gl::SYNC_GPU_COMMANDS_COMPLETE, 0);
+            self.pbo_fence[w] = gl::FenceSync(gl::SYNC_GPU_COMMANDS_COMPLETE, 0);
         }
-        self.pbo_write = 1 - self.pbo_write; // 下一帧写另一个 PBO
-        self.pbo_requests += 1;
-        // 第一帧还没有"上一帧"可读，等第二次请求后才有有效数据
-        if self.pbo_requests >= 2 {
-            self.pbo_pending = true;
-        }
+        self.pbo_written[w] = true;
+        // 翻转：本帧写的这个 PBO 留给下一帧读取，下一帧写另一个
+        self.pbo_write = 1 - w;
     }
 
-    /// 取回**上一帧**的异步回读结果；GPU 还没拷完就保留旧内容，下一帧再试。
+    /// 取回**上一次请求**写入的那个 PBO（即上一帧的画面）。
     ///
-    /// GPU 指令顺序执行，所以只要最新的 fence 已 signal，更早那次拷贝必然完成。
+    /// 只检查那一次拷贝自己的 fence：GPU 没拷完就跳过本帧（沿用旧内容），
+    /// 连续 PBO_READY_LIMIT 帧都等不到就自动退回同步回读，避免一直黑屏。
     pub fn fetch_readback(&mut self) {
-        if !self.pbo_enabled || !self.pbo_pending {
+        if !self.pbo_enabled {
             return;
         }
+        // 写完即翻转，所以 pbo_write 现在指的正是"上一次请求写的那个"
+        let r = self.pbo_write;
+        if !self.pbo_written[r] {
+            return; // 首帧还没有可读的历史数据
+        }
         unsafe {
-            if !self.pbo_fence.is_null()
-                && gl::ClientWaitSync(self.pbo_fence, 0, 0) == gl::TIMEOUT_EXPIRED
-            {
-                return; // 还没拷完
+            let fence = self.pbo_fence[r];
+            if !fence.is_null() {
+                let status = gl::ClientWaitSync(fence, 0, 0);
+                if status == gl::TIMEOUT_EXPIRED || status == gl::WAIT_FAILED {
+                    self.pbo_skips += 1;
+                    if self.pbo_skips >= Self::PBO_READY_LIMIT {
+                        log::warn!("异步回读连续 {} 帧没就绪，自动退回同步回读", self.pbo_skips);
+                        self.pbo_enabled = false;
+                        self.populate_pixels();
+                    }
+                    return;
+                }
             }
-            let read_idx = 1 - self.pbo_write;
-            gl::BindBuffer(gl::PIXEL_PACK_BUFFER, self.pbo[read_idx]);
+            gl::BindBuffer(gl::PIXEL_PACK_BUFFER, self.pbo[r]);
             let ptr = gl::MapBufferRange(gl::PIXEL_PACK_BUFFER, 0, self.pixels_len as _,
                                          gl::MAP_READ_BIT);
             if !ptr.is_null() {
                 std::ptr::copy_nonoverlapping(ptr as *const u8, self.pixels.as_mut_ptr(),
                                               self.pixels_len);
                 gl::UnmapBuffer(gl::PIXEL_PACK_BUFFER);
+                self.pbo_skips = 0;
             }
             gl::BindBuffer(gl::PIXEL_PACK_BUFFER, 0);
         }

@@ -159,6 +159,7 @@ python3 tools/vrm0_to_vrm1_min.py 你的模型.vrm assets/新名字.vrm
 | `COLONQ_TRACK_BIND` | 程序 `127.0.0.1:11573`；`run-obs.sh` 为 `0.0.0.0:11573` | 面捕 UDP 绑定地址。**面捕跑在局域网另一台机器时必须是 `0.0.0.0:11573`**（否则一个字节都收不到），只有面捕和渲染同机时才用 `127.0.0.1:11573`；共享网络里请用防火墙只放行面捕机 IP |
 | `COLONQ_TRACK_GAIN` | `1` | 面捕头部旋转增益（>1 夸张动作，<1 减小） |
 | `COLONQ_EXPR_GAIN` | `1` | 面捕表情权重增益（blink/oh 放大） |
+| `COLONQ_PBO` | 未设（=同步回读） | `1` 启用异步双 PBO 回读（真 GPU 上可省掉每帧等 GPU 画完的时间）；任何异常会自动退回同步，不会黑屏 |
 | `COLONQ_DUMP_PNG` | 未设 | 保存 `frame64.png`（原始）和 `frame-view.png`（字符比例视图） |
 | `COLONQ_DUMP_AT` | `120` | 存图间隔帧数，调小可快速出图（如 25） |
 | `COLONQ_DUMP_SEQ` | 未设 | 存图带帧号（`frame-000012.png`），方便合成 GIF |
