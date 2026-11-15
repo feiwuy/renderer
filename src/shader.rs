@@ -129,27 +129,11 @@ impl Shader {
             gl::AttachShader(prog, frag);
             gl::DeleteShader(frag);
 
-            gl::BindAttribLocation(
-                prog,
-                utils::ATTRIB_VERTEX,
-                b"vertex\0".as_ptr() as *const i8,
-            );
-            gl::BindAttribLocation(
-                prog,
-                utils::ATTRIB_NORMAL,
-                b"normal\0".as_ptr() as *const i8,
-            );
-            gl::BindAttribLocation(
-                prog,
-                utils::ATTRIB_TEXCOORD,
-                b"texcoord\0".as_ptr() as *const i8,
-            );
-            gl::BindAttribLocation(prog, utils::ATTRIB_JOINT, b"joint\0".as_ptr() as *const i8);
-            gl::BindAttribLocation(
-                prog,
-                utils::ATTRIB_WEIGHT,
-                b"weight\0".as_ptr() as *const i8,
-            );
+            gl::BindAttribLocation(prog, utils::ATTRIB_VERTEX, c"vertex".as_ptr());
+            gl::BindAttribLocation(prog, utils::ATTRIB_NORMAL, c"normal".as_ptr());
+            gl::BindAttribLocation(prog, utils::ATTRIB_TEXCOORD, c"texcoord".as_ptr());
+            gl::BindAttribLocation(prog, utils::ATTRIB_JOINT, c"joint".as_ptr());
+            gl::BindAttribLocation(prog, utils::ATTRIB_WEIGHT, c"weight".as_ptr());
 
             gl::LinkProgram(prog);
             Self::check_link_error(prog);
@@ -178,79 +162,34 @@ impl Shader {
 
             Self {
                 prog,
-                uniform_view: gl::GetUniformLocation(prog, b"view\0".as_ptr() as *const i8),
-                uniform_position: gl::GetUniformLocation(prog, b"position\0".as_ptr() as *const i8),
-                uniform_projection: gl::GetUniformLocation(
-                    prog,
-                    b"projection\0".as_ptr() as *const i8,
-                ),
-                uniform_normal: gl::GetUniformLocation(
-                    prog,
-                    b"normal_matrix\0".as_ptr() as *const i8,
-                ),
-                uniform_camera_pos: gl::GetUniformLocation(
-                    prog,
-                    b"camera_pos\0".as_ptr() as *const i8,
-                ),
-                uniform_base_color: gl::GetUniformLocation(
-                    prog,
-                    b"base_color\0".as_ptr() as *const i8,
-                ),
-                uniform_exposure: gl::GetUniformLocation(prog, b"exposure\0".as_ptr() as *const i8),
-                uniform_saturation: gl::GetUniformLocation(
-                    prog,
-                    b"saturation\0".as_ptr() as *const i8,
-                ),
-                uniform_contrast: gl::GetUniformLocation(prog, b"contrast\0".as_ptr() as *const i8),
-                uniform_skin_tint: gl::GetUniformLocation(
-                    prog,
-                    b"skin_tint\0".as_ptr() as *const i8,
-                ),
-                uniform_skin_sat: gl::GetUniformLocation(prog, b"skin_sat\0".as_ptr() as *const i8),
-                uniform_lift: gl::GetUniformLocation(prog, b"shade_lift\0".as_ptr() as *const i8),
-                uniform_toony: gl::GetUniformLocation(
-                    prog,
-                    b"shading_toony\0".as_ptr() as *const i8,
-                ),
-                uniform_shift: gl::GetUniformLocation(
-                    prog,
-                    b"shading_shift\0".as_ptr() as *const i8,
-                ),
-                uniform_shade_tint: gl::GetUniformLocation(
-                    prog,
-                    b"shade_tint\0".as_ptr() as *const i8,
-                ),
-                uniform_rim: gl::GetUniformLocation(prog, b"rim_strength\0".as_ptr() as *const i8),
-                uniform_outline_width: gl::GetUniformLocation(
-                    prog,
-                    b"outline_width\0".as_ptr() as *const i8,
-                ),
-                uniform_outline_color: gl::GetUniformLocation(
-                    prog,
-                    b"outline_color\0".as_ptr() as *const i8,
-                ),
-                uniform_outline_pass: gl::GetUniformLocation(
-                    prog,
-                    b"outline_pass\0".as_ptr() as *const i8,
-                ),
-                uniform_outline_glow: gl::GetUniformLocation(
-                    prog,
-                    b"outline_glow\0".as_ptr() as *const i8,
-                ),
-                uniform_part_id: gl::GetUniformLocation(prog, b"part_id\0".as_ptr() as *const i8),
-                uniform_part_pass: gl::GetUniformLocation(
-                    prog,
-                    b"part_pass\0".as_ptr() as *const i8,
-                ),
+                uniform_view: gl::GetUniformLocation(prog, c"view".as_ptr()),
+                uniform_position: gl::GetUniformLocation(prog, c"position".as_ptr()),
+                uniform_projection: gl::GetUniformLocation(prog, c"projection".as_ptr()),
+                uniform_normal: gl::GetUniformLocation(prog, c"normal_matrix".as_ptr()),
+                uniform_camera_pos: gl::GetUniformLocation(prog, c"camera_pos".as_ptr()),
+                uniform_base_color: gl::GetUniformLocation(prog, c"base_color".as_ptr()),
+                uniform_exposure: gl::GetUniformLocation(prog, c"exposure".as_ptr()),
+                uniform_saturation: gl::GetUniformLocation(prog, c"saturation".as_ptr()),
+                uniform_contrast: gl::GetUniformLocation(prog, c"contrast".as_ptr()),
+                uniform_skin_tint: gl::GetUniformLocation(prog, c"skin_tint".as_ptr()),
+                uniform_skin_sat: gl::GetUniformLocation(prog, c"skin_sat".as_ptr()),
+                uniform_lift: gl::GetUniformLocation(prog, c"shade_lift".as_ptr()),
+                uniform_toony: gl::GetUniformLocation(prog, c"shading_toony".as_ptr()),
+                uniform_shift: gl::GetUniformLocation(prog, c"shading_shift".as_ptr()),
+                uniform_shade_tint: gl::GetUniformLocation(prog, c"shade_tint".as_ptr()),
+                uniform_rim: gl::GetUniformLocation(prog, c"rim_strength".as_ptr()),
+                uniform_outline_width: gl::GetUniformLocation(prog, c"outline_width".as_ptr()),
+                uniform_outline_color: gl::GetUniformLocation(prog, c"outline_color".as_ptr()),
+                uniform_outline_pass: gl::GetUniformLocation(prog, c"outline_pass".as_ptr()),
+                uniform_outline_glow: gl::GetUniformLocation(prog, c"outline_glow".as_ptr()),
+                uniform_part_id: gl::GetUniformLocation(prog, c"part_id".as_ptr()),
+                uniform_part_pass: gl::GetUniformLocation(prog, c"part_pass".as_ptr()),
                 parts_enabled: utils::env_flag("COLONQ_PARTS", false),
                 outline_width: utils::env_parse::<f32>("COLONQ_OUTLINE").unwrap_or(0.004),
-                uniform_joint_matrices: gl::GetUniformLocation(
-                    prog,
-                    b"joint_matrices\0".as_ptr() as *const i8,
-                ),
+                uniform_joint_matrices: gl::GetUniformLocation(prog, c"joint_matrices".as_ptr()),
                 max_joints,
                 clip_y,
-                uniform_clip_y: gl::GetUniformLocation(prog, b"clip_y\0".as_ptr() as *const i8),
+                uniform_clip_y: gl::GetUniformLocation(prog, c"clip_y".as_ptr()),
                 uniform_expressions,
             }
         }
