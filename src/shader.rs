@@ -161,7 +161,7 @@ impl Shader {
                 uniform_outline_glow: gl::GetUniformLocation(prog, b"outline_glow\0".as_ptr() as *const i8),
                 uniform_part_id: gl::GetUniformLocation(prog, b"part_id\0".as_ptr() as *const i8),
                 uniform_part_pass: gl::GetUniformLocation(prog, b"part_pass\0".as_ptr() as *const i8),
-                parts_enabled: std::env::var("COLONQ_PARTS").is_ok(),
+                parts_enabled: utils::env_flag("COLONQ_PARTS", false),
                 outline_width: std::env::var("COLONQ_OUTLINE").ok()
                     .and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(0.004),
                 uniform_joint_matrices: gl::GetUniformLocation(prog, b"joint_matrices\0".as_ptr() as *const i8),

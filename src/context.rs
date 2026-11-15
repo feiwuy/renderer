@@ -161,8 +161,8 @@ impl Context {
         // block swap on Wayland; never use their frame callbacks to clock the renderer.
         let serving = std::env::var("COLONQ_SERVE").ok()
             .and_then(|v| v.trim().parse::<u16>().ok()).is_some();
-        let preview_enabled = std::env::var("COLONQ_PREVIEW")
-            .map(|v| v != "0").unwrap_or(!serving);
+        // 推流模式默认隐藏预览窗口；COLONQ_PREVIEW=1/0 可显式覆盖
+        let preview_enabled = utils::env_flag("COLONQ_PREVIEW", !serving);
         let mut builder = video.window("colonq", 640, 360);
         builder.opengl();
         if !preview_enabled { builder.hidden(); }
@@ -172,7 +172,7 @@ impl Context {
 
         // This must happen AFTER the GL context is current. Previously this call was
         // made before context creation and its failure was silently ignored.
-        let vsync = std::env::var("COLONQ_VSYNC").map(|v| v != "0").unwrap_or(false);
+        let vsync = utils::env_flag("COLONQ_VSYNC", false);
         if let Err(e) = video.gl_set_swap_interval(if vsync { 1 } else { 0 }) {
             log::warn!("设置 GL swap interval 失败: {}；推流无预览模式不调用 swap", e);
         }

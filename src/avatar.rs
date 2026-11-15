@@ -1,6 +1,6 @@
 pub mod hat;
 
-use crate::{vrm, context, shader, gl, fig};
+use crate::{vrm, context, shader, gl, fig, utils};
 
 use std::collections::HashMap;
 
@@ -90,7 +90,7 @@ pub struct PalettePlayers {
 impl PalettePlayers {
     pub fn new(ctx: &context::Context) -> Self {
         // COLONQ_NO_MPV=1：完全不创建 libmpv 实例（每个实例会带若干线程和几十 MB 内存）
-        if std::env::var("COLONQ_NO_MPV").is_ok() {
+        if utils::env_flag("COLONQ_NO_MPV", false) {
             log::info!("COLONQ_NO_MPV：跳过 libmpv 初始化（视频填充不可用，省内存/线程）");
             return Self { players: HashMap::new() };
         }

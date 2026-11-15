@@ -3,6 +3,8 @@ use std::time::{Duration, Instant};
 
 use byteorder::ByteOrder;
 
+use crate::utils;
+
 pub type SharedTrackingState = std::sync::Arc<std::sync::Mutex<TrackingState>>;
 
 /// 面捕数据在多久内算“有效”；超时后回退到待机动画
@@ -156,7 +158,7 @@ pub fn start_receiver(bind: &str, sts: SharedTrackingState) -> std::io::Result<s
         log::info!("面捕平滑: 系数 {}（越大越平滑，延迟越高）", smooth);
     }
     std::thread::spawn(move || {
-        let diag = std::env::var("COLONQ_TRACK_DEBUG").map(|v| v != "0").unwrap_or(false);
+        let diag = utils::env_flag("COLONQ_TRACK_DEBUG", false);
         let flip_mode: u8 = std::env::var("COLONQ_FLIP").ok()
             .and_then(|v| v.trim().parse().ok()).unwrap_or(1);
         let offset_rad = std::env::var("COLONQ_ROT_OFFSET").ok()
@@ -167,7 +169,7 @@ pub fn start_receiver(bind: &str, sts: SharedTrackingState) -> std::io::Result<s
         // COLONQ_PITCH_SIGN=-1：低头/抬头方向反转（俯仰轴镜像）
         // COLONQ_QSIGN="x,y,z"：分别翻转原始四元数的三个分量（默认 1,1,1）
         // COLONQ_SWAP_PY=1：交换补偿欧拉角的 pitch 和 yaw（实测：点头↔摇头轴错位时用）
-        let pitch_flip = std::env::var("COLONQ_PITCH_FLIP").map(|v| v == "1").unwrap_or(false);
+        let pitch_flip = utils::env_flag("COLONQ_PITCH_FLIP", false);
         let (qx_sign, qy_sign, qz_sign) = std::env::var("COLONQ_QSIGN").ok()
             .and_then(|v| {
                 let parts: Vec<f32> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();

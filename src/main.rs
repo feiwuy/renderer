@@ -65,12 +65,12 @@ fn render_loop(
         .and_then(|v| display::Size::parse(&v)).unwrap_or(display::Size::new(128, 64));
     let (grid_w, grid_h) = (requested.w.clamp(16, 512) as i32, requested.h.clamp(16, 256) as i32);
     let requested = display::Size::new(grid_w as usize, grid_h as usize);
-    let term_mode = std::env::var("COLONQ_NO_TERM").is_err();
-    let fit_enabled = std::env::var("COLONQ_FIT").map(|v| v != "0").unwrap_or(true);
+    // 开关统一走 utils::env_flag：COLONQ_NO_TERM=0 表示"要终端输出"（未设置时默认要）
+    let term_mode = !utils::env_flag("COLONQ_NO_TERM", false);
+    let fit_enabled = utils::env_flag("COLONQ_FIT", true);
     let size_hint = std::env::var("COLONQ_SIZE").ok()
         .and_then(|v| display::Size::parse(&v));
-    let pixels_mode = size_hint.is_some()
-        || std::env::var("COLONQ_PIXELS").map(|v| v == "1").unwrap_or(false);
+    let pixels_mode = size_hint.is_some() || utils::env_flag("COLONQ_PIXELS", false);
     let cell_px = (env_f32("COLONQ_CELL_W", 7.0), env_f32("COLONQ_CELL_H", 14.0));
     let fit = || {
         let terminal = termion::terminal_size().ok()
@@ -96,7 +96,7 @@ fn render_loop(
 
     // 按部位分表：COLONQ_PARTS=1 启用，COLONQ_PART_WORDS="1=.,2=~,3=#,4=colonq"
     // 部位编号：1=脸/皮肤 2=头发 3=眼睛 4=衣服 9=其他；COLONQ_WORD 是默认词
-    if std::env::var("COLONQ_PARTS").is_ok() {
+    if utils::env_flag("COLONQ_PARTS", false) {
         let mut c = control.0.lock().unwrap();
         if let Ok(w) = std::env::var("COLONQ_WORD") {
             c.palette.default_word = w;
@@ -241,23 +241,23 @@ fn render_loop(
     );
 
     // COLONQ_DUMP_PNG=1 时把画面存成 PNG，用于无终端/无显示环境下验证渲染是否正确
-    let dump_png = std::env::var("COLONQ_DUMP_PNG").is_ok();
+    let dump_png = utils::env_flag("COLONQ_DUMP_PNG", false);
     let dump_at = std::env::var("COLONQ_DUMP_AT").ok()
         .and_then(|v| v.trim().parse::<i32>().ok()).unwrap_or(120).max(1);
     let arm_pose = env_f32("COLONQ_ARM_POSE", -0.80);
-    let no_mpv = std::env::var("COLONQ_NO_MPV").is_ok();
+    let no_mpv = utils::env_flag("COLONQ_NO_MPV", false);
     // 待机动画：让模型自己动起来（转头、眨眼、呼吸），默认开启
-    let idle = std::env::var("COLONQ_IDLE").map(|v| v != "0").unwrap_or(true);
+    let idle = utils::env_flag("COLONQ_IDLE", true);
     let idle_speed = env_f32("COLONQ_IDLE_SPEED", 1.0);
     let idle_phase = env_f32("COLONQ_T0", 0.0);
     let anim_start = std::time::Instant::now();
     // 序列存图：COLONQ_DUMP_SEQ=1 时存成 frame-000005.png 这样，方便合成动图
-    let dump_seq = std::env::var("COLONQ_DUMP_SEQ").is_ok();
+    let dump_seq = utils::env_flag("COLONQ_DUMP_SEQ", false);
     // 终端重画间隔（帧）：默认 6 → 60fps 下约 10 次/秒。设 1 则每帧都重画（更流畅但更费 CPU）
     let term_every = std::env::var("COLONQ_TERM_EVERY").ok()
         .and_then(|v| v.trim().parse::<i32>().ok()).unwrap_or(1).max(1);
     // 分层计时（COLONQ_PROFILE=1 时每 60 帧输出一次各阶段平均耗时）
-    let profile = std::env::var("COLONQ_PROFILE").is_ok();
+    let profile = utils::env_flag("COLONQ_PROFILE", false);
     let (mut t_avatar, mut t_blit, mut t_swap, mut t_term, mut t_pop, mut t_cnt) =
         (0f64, 0f64, 0f64, 0f64, 0f64, 0u32);
     let mut term_updates = 0u32;
@@ -539,7 +539,7 @@ fn render_loop(
             }
             t_term += t0.elapsed().as_secs_f64() * 1000.0;
         }
-        if framecount % 12 == 0 && std::env::var("COLONQ_DUMP_FRAMES").is_ok() {
+        if framecount % 12 == 0 && utils::env_flag("COLONQ_DUMP_FRAMES", false) {
             let frame = if keyframe_counter == 0 {
                 term.serialize_and_compress()
             } else {
