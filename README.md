@@ -101,8 +101,11 @@ make golden-update# 确认画面改动符合预期后，刷新渲染基准
 ```
 
 - **渲染基准**（`tools/golden.sh`）：在 `COLONQ_IDLE=0` + 固定 GRID/MODEL 下渲染第 120 帧并比
-  sha256。基准值与**机器/驱动相关**，换机器或升级驱动后需要 `--update` 重建；缺模型或缺
-  GL 环境时会输出 SKIP 并返回 0，不会在无头环境误报。
+  sha256。基准文件里同时记录了生成它的 **GL renderer 指纹**：
+  - 同一渲染器 + 哈希不同 → **FAIL**（这是真回归）
+  - 渲染器不同（换机器/升级驱动）→ **SKIP** 并提示 `--update`，不会给你假的 FAIL
+  - 缺模型或缺 GL 环境 → **SKIP** 返回 0
+  所以**每台机器需要各自 `--update` 一次**：确认画面正确后跑，然后提交 `tests/golden/`。
 - **CI**：`.github/workflows/ci.yml` 跑上面除渲染基准外的全部检查，警告即失败。
 - 依赖版本已在 `Cargo.toml` 固定（不再是 `"*"`），升级时改版本号 + 跑 `make check`。
 
@@ -180,6 +183,7 @@ make golden-update# 确认画面改动符合预期后，刷新渲染基准
 | `COLONQ_EXPR_GAIN` | `1` | 面捕表情权重增益（blink/oh 放大） |
 | `COLONQ_PBO` | 未设（=同步回读） | `1` 启用异步双 PBO 回读（真 GPU 上可省掉每帧等 GPU 画完的时间）；任何异常会自动退回同步，不会黑屏 |
 | `COLONQ_DUMP_PNG` | 未设 | 保存 `frame64.png`（原始）和 `frame-view.png`（字符比例视图） |
+| `COLONQ_DUMP_EXIT` | 未设 | 存完图立刻退出（`tools/golden.sh` 用它，省得靠 timeout 兜底） |
 | `COLONQ_DUMP_AT` | `120` | 存图间隔帧数，调小可快速出图（如 25） |
 | `COLONQ_DUMP_SEQ` | 未设 | 存图带帧号（`frame-000012.png`），方便合成 GIF |
 | `COLONQ_DUMP_FRAMES` | 未设 | 每 12 帧把序列化帧写到 `frame-*.bin`（原本是推流用的数据） |

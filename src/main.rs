@@ -765,6 +765,11 @@ fn render_loop(
             }
             unsafe { while gl::GetError() != 0 {} } // 调试回读自身可能产生 GL 错误，清掉
             log::info!("dumped {} / frame-view.png at frame {}", name, framecount);
+            // COLONQ_DUMP_EXIT=1：存完图就退出，省得靠 timeout 兜底（tools/golden.sh 用）
+            if utils::env_flag("COLONQ_DUMP_EXIT", false) {
+                log::info!("COLONQ_DUMP_EXIT：已存图，退出");
+                std::process::exit(0);
+            }
         }
 
         // refresh display

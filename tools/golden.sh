@@ -2,19 +2,19 @@
 # 渲染基准图回归检查
 #
 # 目的：改动渲染相关代码后，确认画面**逐位没变**。
-# 背景：COLONQ_IDLE=0 + 固定参数下渲染是确定性的（同一台机器反复跑 sha256 一致），
+# 背景：COLONQ_IDLE=0 + 固定参数下渲染是确定性的（同一台机器、同一驱动反复跑 sha256 一致），
 #       所以可以把某一帧的哈希当基准。之前踩过两次「画面变了」的坑（黑屏、字符错位），
 #       这类问题单元测试抓不到，这个脚本能抓到。
 #
 # 用法：
-#   sh tools/golden.sh            # 对比，不一致则失败
-#   sh tools/golden.sh --update   # 用当前渲染刷新基准（确认这是你想要的画面后再跑）
+#   sh tools/golden.sh            # 对比；不一致则失败
+#   sh tools/golden.sh --update   # 用当前渲染刷新基准（确认画面正确后再跑）
 #
-# 说明：
-#   - 基准**与机器/驱动相关**（显卡、驱动版本不同，浮点结果可能有极微小差异），
-#     所以基准文件是「本机基线」，换机器后需要 --update 重建。
-#   - 需要 assets/my_avatar.vrm（或用 GOLDEN_MODEL 指定别的模型）；缺模型或没有
-#     GL 环境（例如无头 CI）时输出 SKIP 并以 0 退出，避免误报。
+# 重要：渲染结果与**显卡/驱动有关**（不同实现浮点舍入可能不同），所以基准文件里记录了
+#       生成它的 GL renderer。换了机器或驱动后，脚本会报 SKIP 并要求 --update 重建，
+#       而不会给你一个假的 FAIL。
+#
+# 需要 assets/my_avatar.vrm（或用 GOLDEN_MODEL 指定）；缺模型或缺 GL 环境时 SKIP 并返回 0。
 set -u
 cd "$(dirname "$0")/.." || exit 1
 
@@ -23,6 +23,7 @@ GOLDEN_DIR=tests/golden
 GOLDEN="$GOLDEN_DIR/frame64.sha256"
 MODEL="${GOLDEN_MODEL:-my_avatar.vrm}"
 GRID="${GOLDEN_GRID:-128x64}"
+LOG=colonq.log
 
 if [ ! -x "$BIN" ]; then
     echo "SKIP: 找不到 $BIN，先 cargo build --release" >&2
@@ -33,31 +34,33 @@ if [ ! -f "assets/$MODEL" ]; then
     exit 0
 fi
 
-render() {
-    rm -f frame64.png frame-view.png
-    env COLONQ_IDLE=0 COLONQ_NO_TERM=1 COLONQ_PREVIEW=0 COLONQ_FPS=0 \
-        COLONQ_DUMP_PNG=1 COLONQ_DUMP_AT=120 \
-        COLONQ_GRID="$GRID" COLONQ_MODEL="$MODEL" \
-        timeout 30 "$BIN" >/dev/null 2>&1 || true
-}
+rm -f frame64.png frame-view.png "$LOG"
+env COLONQ_IDLE=0 COLONQ_NO_TERM=1 COLONQ_PREVIEW=0 COLONQ_FPS=0 \
+    COLONQ_DUMP_PNG=1 COLONQ_DUMP_AT=120 COLONQ_DUMP_EXIT=1 \
+    COLONQ_GRID="$GRID" COLONQ_MODEL="$MODEL" \
+    timeout 60 "$BIN" >/dev/null 2>&1 || true
 
-render
 if [ ! -f frame64.png ]; then
     echo "SKIP: 渲染没有产出 frame64.png（可能没有可用 GL 环境）" >&2
     exit 0
 fi
 
 actual=$(sha256sum frame64.png | cut -d' ' -f1)
+# 从渲染器日志里取 GL renderer 字符串，作为「基准是否同源」的指纹
+renderer=$(sed -n 's/.*renderer=\([^|]*\).*/\1/p' "$LOG" | head -1 | sed 's/[[:space:]]*$//')
 rm -f frame64.png frame-view.png
 
 if [ "${1:-}" = "--update" ]; then
     mkdir -p "$GOLDEN_DIR"
     {
         echo "# 渲染基准：COLONQ_IDLE=0 / FPS 不限 / DUMP_AT=120 / GRID=$GRID / MODEL=$MODEL"
-        echo "# 更新方式：sh tools/golden.sh --update（换机器或换驱动后需要重建）"
-        echo "$actual"
+        echo "# 渲染结果与显卡/驱动相关；换机器或升级驱动后需要 sh tools/golden.sh --update 重建"
+        echo "gl: $renderer"
+        echo "sha: $actual"
     } > "$GOLDEN"
-    echo "已更新基准: $GOLDEN → $actual"
+    echo "已更新基准: $GOLDEN"
+    echo "  渲染器: $renderer"
+    echo "  sha256: $actual"
     exit 0
 fi
 
@@ -66,13 +69,29 @@ if [ ! -f "$GOLDEN" ]; then
     exit 1
 fi
 
-expected=$(grep -v '^#' "$GOLDEN" | head -1 | tr -d '[:space:]')
+expected_gl=$(sed -n 's/^gl:[[:space:]]*//p' "$GOLDEN" | head -1)
+expected=$(sed -n 's/^sha:[[:space:]]*//p' "$GOLDEN" | head -1 | tr -d '[:space:]')
+
+if [ -z "$expected" ]; then
+    # 兼容旧格式（只有一行 hash，没有 gl 指纹）：无法判断是否同源，只能提示重建
+    echo "SKIP: 基准文件是旧格式（没有 gl 指纹），无法判断是否同一渲染器" >&2
+    echo "      确认画面正确后运行: sh tools/golden.sh --update" >&2
+    exit 0
+fi
+
+if [ "$renderer" != "$expected_gl" ]; then
+    echo "SKIP: 渲染器与基准不同（基准: $expected_gl / 当前: $renderer）" >&2
+    echo "      渲染结果与驱动相关，这不代表回归。在本机重建基准后再跑：" >&2
+    echo "          sh tools/golden.sh --update" >&2
+    exit 0
+fi
+
 if [ "$actual" = "$expected" ]; then
     echo "PASS: 渲染与基准一致（$actual）"
     exit 0
 fi
 
-echo "FAIL: 渲染结果与基准不一致" >&2
+echo "FAIL: 渲染结果与基准不一致（同一渲染器: $renderer）" >&2
 echo "  基准: $expected" >&2
 echo "  实际: $actual" >&2
 echo "  如果这是有意改动（例如调整了着色/取景），确认画面正确后运行:" >&2
