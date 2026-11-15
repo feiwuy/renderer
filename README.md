@@ -1,113 +1,57 @@
-# renderer（lcolonq/renderer）本地部署版
+# renderer（lcolonq/renderer）个人自用分支
 
-这是 [lcolonq/renderer](https://github.com/lcolonq/renderer) 的本地可运行副本。
-上游是 GPL-3.0，本目录的改动同样遵循 GPL-3.0（见 `LICENSE`）。
+> ## 致敬原作者
+>
+> 本项目的渲染思路、着色器框架、ASCII 调色板方案、面捕数据解析，全部来自
+> **[lcolonq/renderer](https://github.com/lcolonq/renderer)**（作者 **lcolonq / Studio Milkfat**）。
+>
+> 这个仓库只是站在原作者肩膀上，为自己这台机器做的适配与调优——**核心创意和绝大部分代码都属于原作者**。
+> 想看真正的项目、想提 issue 或参与讨论，请去上游仓库。
 
-**已在本机（Arch Linux / RTX 4060 + AMD Phoenix1 / rustc 2026）编译通过并实跑出画面。**
+> ## 个人用途声明
+>
+> - 这是**个人自用分支**，只服务于我自己的直播 / 录制环境。
+> - **不承诺维护**：不保证可用、不一定修 bug、不一定回应 issue 与 PR。
+> - 不少改动是「在我这台机器上成立」的临时方案（Arch + Radeon 780M / RTX 4060、24 fps、
+>   局域网面捕、OBS 浏览器源），换环境可能需要重新校准，见 `FACE_CAPTURE.md` 与 `UBUNTU_FACECAP.md`。
+> - 想要稳定可用的版本，请以**上游仓库**为准。
+>
+> **许可**：上游与本分支同为 **GPL-3.0**（见 `LICENSE`）。若分发本分支的产物，请保留原作者署名，
+> 并同样以 GPL-3.0 开放源代码。
 
 ---
 
 ## 它是什么
 
 把 VRM 虚拟形象用 OpenGL 渲染到离屏 FBO，再降采样成终端里的彩色字符打印到 stdout。
-上游版本还带面部追踪（OpenSeeFace → UDP）和 websocket 推流，本地版把推流去掉了。
+上游版本还带面部追踪（OpenSeeFace → UDP）和 websocket 推流，本地版把推流换成了本地 HTTP + SSE。
 
 数据流：
 
 ```
 VRM 模型 ──gltf 载入──> VAO/骨骼/表情属性
                             │
-                    OpenGL 渲染到 64×64 FBO
+                    OpenGL 渲染到离屏 FBO
                             │  GetTextureImage 回读
-                    CPU 逐像素 → 调色板替换（默认换成 "colonq" 字样）→ ANSI 字符
+                    CPU 逐像素 → 调色板替换（默认换成 "lcolonq" 字样）→ ANSI 字符
                             │
-                      stdout（终端里看到画面）
+                  stdout（终端）/ SSE（OBS 浏览器源）
 ```
 
-## 环境要求
+## 特色
 
-| 依赖 | 说明 |
-|---|---|
-| `sdl2`（Arch 上是 `sdl2-compat`） | 建窗口 + GL 上下文，`pkg-config --modversion sdl2` 有输出即可 |
-| `mpv` | libmpv 运行库（`/usr/lib/libmpv.so`），视频贴图功能要用 |
-| 支持 OpenGL 4.6 的显卡 | 着色器本身只写 `#version 330`，但生成的绑定是 4.6 级别 |
-| Rust 工具链 | `cargo` |
-| 显示环境 | 必须有 `DISPLAY`/`WAYLAND_DISPLAY`，SDL 要开真窗口 |
+- **ASCII 化 VRM 渲染**：离屏 FBO → 回读 → 逐像素映射成彩色字符；填充词可用
+  `COLONQ_WORD` 换成任意词/emoji（默认 `lcolonq`）
+- **按部位分字符表**：脸 / 头发 / 眼睛 / 衣服可各用一套字符（`COLONQ_PARTS=1`）
+- **卡通着色 + 发光描边**：MToon 风格明暗、可调对比与饱和度、皮肤单独染白、青色发光轮廓
+- **取景预设**：`head` / `face` / `bust` / `full` 四档，直接适配 OBS 小窗口（385×350）
+- **真人面捕**：OpenSeeFace → UDP → 头部姿态 / 眨眼 / 张嘴，带轴补偿、翻转档位与按包率自适应的平滑
+- **OBS 推流**：本地 HTTP + SSE + Canvas 查看器，**显示尺寸与内部 128×64 渲染网格解耦**（小窗口不掉精度）
+- **可复现**：依赖版本固定、`cargo fmt` 与 `clippy -D warnings` 干净、22 个单元测试、渲染基准回归
+  （一键自检：`make check`）
 
-**不需要** `SDL2_image`（已改掉）、不需要 nix、不需要 clang/libclang（已改用预生成绑定）。
-
-## 构建与运行
-
-```bash
-./run-local.sh          # 编译 + 运行
-# 或者
-cargo build --release && ./target/release/colonq
-```
-
-运行后：
-
-- 会弹出一个 SDL 窗口，**但真正的画面在终端里**（一堆 ANSI 彩色字符）
-- 退出：关掉 SDL 窗口（或 Ctrl+C / `pkill colonq`）
-- 日志写在当前目录的 `colonq.log`（DEBUG 级别，含模型解析细节）
-
-## 资源
-
-`assets/` 下需要：
-
-| 文件 | 说明 |
-|---|---|
-| `shader.vert` / `shader.frag` | 本项目自己写的 shader（上游没公开），带蒙皮 + 表情形变 + MToon 风格卡通明暗 |
-| `my_avatar.vrm` ⭐默认 | 你从 Downloads 里的 `8319220030028561131.vrm`（**VRM 0.x**，VRoid Studio 1.27 导出）用 `tools/vrm0_to_vrm1_min.py` 转成的 VRM 1.0 壳。注意原模型 `meta.licenseName = "Other"`，是第三方作品，仅供本地自用 |
-| `threevrm_sample.vrm` | `VRM1_Constraint_Twist_Sample.vrm`，来自 [pixiv/three-vrm examples](https://github.com/pixiv/three-vrm/tree/master/packages/three-vrm/examples/models)，**VRM Public License 1.0，© 2022 pixiv Inc.**。11 个表情一个不缺 |
-| `seed_san.vrm` | Seed-san，来自 [vrm-specification samples](https://github.com/vrm-c/vrm-specification/tree/master/samples/Seed-san)，同为 VRM Public License 1.0，模型作者 VirtualCast, Inc. |
-
-**换模型**：任何 **VRM 1.0**（必须带 `VRMC_vrm` 扩展）都行，放进 `assets/` 再用环境变量指定，不用改代码：
-
-```bash
-COLONQ_MODEL=seed_san.vrm ./target/release/colonq
-```
-
-模型缺某个表情不会崩（只会少一个形变），缺 `head`/`leftUpperArm`/`rightUpperArm` 骨骼也会跳过。
-
-资源目录默认是 `<crate>/assets`，可用环境变量 `COLONQ_ASSETS=/path/to/assets` 覆盖。
-
-## VRM 0.x 模型怎么用（转换）
-
-本项目只认 **VRM 1.0**（`VRMC_vrm` 扩展），而 VRoid Studio 1.x 默认导出的是 **VRM 0.x**。转换用自带的小工具：
-
-```bash
-python3 tools/vrm0_to_vrm1_min.py 你的模型.vrm assets/新名字.vrm
-```
-
-它只重写 GLB 里的 JSON 扩展（`extensions.VRM` → `extensions.VRMC_vrm`），**二进制数据完全不动**，因为渲染器只用这两样东西：
-
-- `humanoid.humanBones`（骨骼 → node 索引）
-- `expressions.preset`（每个表情的 morphTargetBinds）
-
-同时会做两件事：VRM 0.x 的表情预设名映射到 1.0（`a→aa`、`joy→happy`、`sorrow→sad`、`fun→relaxed`、`unknown→surprised`…），以及把 0~100 的表情权重归一化到 0~1。
-
-> ⚠️ 这不是完整的 VRM 1.0 转换：**meta / springBone / MToon 材质参数都没迁移**（本渲染器不读，所以不影响显示）。要让别的软件（VSeeFace、VRChat 等）也能用，请改用 Blender + [VRM Add-on](https://extensions.blender.org/add-ons/vrm/) 做标准转换。
-
-**朝向是自动识别的**：脚本保留了旧的 `VRM` 扩展作为标记，`main.rs` 启动时会检查它 —— 带旧扩展的（0.x 转换件）朝向是 -Z，默认 `yaw=0`；原生 VRM 1.0 朝 +Z，默认 `yaw=180°`。手动覆盖仍然用 `COLONQ_YAW`。
-
-## 构建与检查
-
-需要 Rust **1.77+**（用了 C 字符串字面量 `c"..."`）。
-
-```bash
-make check        # fmt + clippy -D warnings + cargo test + viewer 测试 + 渲染基准
-make check-fast   # 跳过渲染基准（没有 GPU / 没放模型时用这个）
-make golden-update# 确认画面改动符合预期后，刷新渲染基准
-```
-
-- **渲染基准**（`tools/golden.sh`）：在 `COLONQ_IDLE=0` + 固定 GRID/MODEL 下渲染第 120 帧并比
-  sha256。基准文件里同时记录了生成它的 **GL renderer 指纹**：
-  - 同一渲染器 + 哈希不同 → **FAIL**（这是真回归）
-  - 渲染器不同（换机器/升级驱动）→ **SKIP** 并提示 `--update`，不会给你假的 FAIL
-  - 缺模型或缺 GL 环境 → **SKIP** 返回 0
-  所以**每台机器需要各自 `--update` 一次**：确认画面正确后跑，然后提交 `tests/golden/`。
-- **CI**：`.github/workflows/ci.yml` 跑上面除渲染基准外的全部检查，警告即失败。
-- 依赖版本已在 `Cargo.toml` 固定（不再是 `"*"`），升级时改版本号 + 跑 `make check`。
+> 构建与运行方式请参考**上游仓库的 README**。本分支额外要求 Rust **1.77+**（用了 C 字符串字面量
+> `c"..."`）、支持 OpenGL 4.6 的显卡与图形会话，以及 `sdl2` / `mpv` 运行库。
 
 ## 环境变量
 
