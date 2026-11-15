@@ -92,7 +92,7 @@ export COLONQ_EXPR_GAIN="${COLONQ_EXPR_GAIN:-1}"           # 总增益
 # export COLONQ_EXPR_GAINS="happy=1.2,sad=0.6,aa=0.8"      # 逐表情（不设就全 1）
 export COLONQ_MOUTH_OVERRIDE="${COLONQ_MOUTH_OVERRIDE:-0.7}"   # 笑时元音让位
 export COLONQ_OPEN_VS_SMILE="${COLONQ_OPEN_VS_SMILE:-0.45}"    # 张嘴不误判成笑
-export COLONQ_EYE_SURPRISE="${COLONQ_EYE_SURPRISE:-0.55}"      # 瞪眼→惊讶
+export COLONQ_EYE_SURPRISE="${COLONQ_EYE_SURPRISE:-0.65}"      # 瞪眼→惊讶
 # export COLONQ_EXPR_MAP="relaxed=blinkLeft"               # 槽位换绑
 # export COLONQ_LOG=debug / COLONQ_TRACK_DEBUG=2           # 调参时开
 # Keep model, grid, camera and color settings inherited from the user's environment.

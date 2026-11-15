@@ -262,6 +262,8 @@ pub struct ExprOptions {
     pub mouth_gain: f32,
     /// 嘴部响应曲线（gamma）。小于 1 会抬起中低段，大于 1 更"线性到后半段"。
     pub mouth_curve: f32,
+    /// 笑眼由什么触发：`0`=嘴角笑（默认）、`1`=张嘴幅度、`2`=两者取大
+    pub laugh_src: u8,
     /// 嘴部**幅度上限**：五个口型最后统一乘这个。
     /// 灵敏度（`mouth_gain`）决定"多小的张口就开始动"，这个决定"张到最大时多大" ——
     /// 觉得嘴张得太夸张就调小它，不用牺牲起效点。
@@ -279,6 +281,7 @@ impl Default for ExprOptions {
             laugh_hi: 0.95,
             laugh_close: 1.0,
             laugh_iris: 0.9,
+            laugh_src: 0,
             mouth_gain: 1.8,
             mouth_curve: 1.0,
             mouth_max: 0.7,
@@ -306,6 +309,16 @@ impl ExprOptions {
             mouth_gain: read("COLONQ_MOUTH_GAIN", d.mouth_gain).max(0.01),
             mouth_curve: read("COLONQ_MOUTH_CURVE", d.mouth_curve).max(0.01),
             mouth_max: read("COLONQ_MOUTH_MAX", d.mouth_max).clamp(0.0, 2.0),
+            laugh_src: match std::env::var("COLONQ_EYE_LAUGH_SRC")
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_lowercase()
+                .as_str()
+            {
+                "mouth" | "open" | "张嘴" | "1" => 1,
+                "either" | "both" | "max" | "2" => 2,
+                _ => d.laugh_src,
+            },
         }
     }
 }
@@ -402,7 +415,13 @@ pub fn compute_weights(f: &RawFeatures, opts: &ExprOptions) -> ExprWeights {
     // "整只眼闭上" 和 "眼珠变白" 的 morph），权重按 happy 的斜坡来 ——
     // 小小一笑只动嘴角，笑到一定程度眼角才眯起来，这才是动画里的观感。
     if opts.eye_laugh {
-        let t = ramp(w.get("happy"), opts.laugh_lo, opts.laugh_hi);
+        // 触发源：嘴角笑 / 张嘴幅度 / 两者取大
+        let src = match opts.laugh_src {
+            1 => open,
+            2 => w.get("happy").max(open),
+            _ => w.get("happy"),
+        };
+        let t = ramp(src, opts.laugh_lo, opts.laugh_hi);
         w.set("relaxed", t * opts.laugh_close);
         w.set("ih", t * opts.laugh_iris);
     }
@@ -1162,6 +1181,50 @@ mod tests {
         let off = weights_with(f, &ExprOptions::default());
         assert_eq!(off.get("relaxed"), 0.0);
         assert_eq!(off.get("ih"), 0.0);
+    }
+
+    #[test]
+    fn eye_laugh_source_can_be_mouth_instead_of_smile() {
+        // 只张嘴、嘴角不上扬：默认（嘴角笑）不该眯眼；SRC=mouth 才眯
+        let mut f = [0.0f32; 14];
+        f[12] = 0.8; // 张嘴
+        let by_smile = weights_with(
+            f,
+            &ExprOptions {
+                eye_laugh: true,
+                ..ExprOptions::default()
+            },
+        );
+        assert_eq!(
+            by_smile.get("relaxed"),
+            0.0,
+            "只张嘴不该眯眼: {:?}",
+            by_smile
+        );
+
+        let by_mouth = weights_with(
+            f,
+            &ExprOptions {
+                eye_laugh: true,
+                laugh_src: 1,
+                ..ExprOptions::default()
+            },
+        );
+        assert!(
+            by_mouth.get("relaxed") > 0.5,
+            "SRC=mouth 应眯眼: {:?}",
+            by_mouth
+        );
+
+        let either = weights_with(
+            f,
+            &ExprOptions {
+                eye_laugh: true,
+                laugh_src: 2,
+                ..ExprOptions::default()
+            },
+        );
+        assert!(either.get("relaxed") > 0.5, "{:?}", either);
     }
 
     #[test]
