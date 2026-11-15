@@ -53,7 +53,13 @@ impl Control {
     pub fn run(self, command_sender: Sender<ControlCommand>) {
         std::thread::spawn(move || {
             // let mut stream = std::net::TcpStream::connect("shiro:32050").unwrap();
-            let mut stream = std::net::TcpStream::connect("localhost:32050").unwrap();
+            let mut stream = match std::net::TcpStream::connect("localhost:32050") {
+                Ok(s) => s,
+                Err(e) => {
+                    log::warn!("控制通道 localhost:32050 不可用（{}），跳过控制功能", e);
+                    return;
+                }
+            };
             stream.write_all("(sub (avatar toggle))
 (sub (avatar palette word))
 (sub (avatar palette color))

@@ -1,0 +1,25 @@
+const assert = require('node:assert/strict');
+const { layout } = require('./viewer.js');
+const box = layout(128, 64, 329, 295);
+assert.equal(box.contentWidth, 295);
+assert.equal(box.contentHeight, 295);
+assert.equal(box.left, 17);
+assert.equal(box.top, 0);
+assert.equal(box.cellHeight, box.cellWidth * 2);
+const small = layout(128, 64, 200, 100, 329, 295);
+assert.equal(small.contentWidth, 100);
+assert.equal(small.contentHeight, 100);
+const bounded = layout(128, 64, 1920, 1080, 329, 295);
+assert.equal(bounded.contentWidth, 295);
+assert.equal(bounded.contentHeight, 295);
+assert.equal(bounded.left, (1920 - 295) / 2);
+assert.equal(layout(0, 64, 329, 295), null);
+assert.equal(layout(128, 64, NaN, 295), null);
+console.log('PASS: 329×295、缩小窗口、布局边界、字符比例和无效参数');
+
+const obs = layout(128, 64, 385, 350, 385, 350);
+assert.equal(obs.contentWidth, 350);
+assert.equal(obs.contentHeight, 350);
+assert.equal(obs.left, 17.5);
+assert.equal(obs.top, 0);
+console.log('PASS: 385×350 内部比例保持，左右各留17.5px');

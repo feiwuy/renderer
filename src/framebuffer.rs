@@ -70,6 +70,17 @@ impl Framebuffer {
         }
     }
 
+    /// 网格尺寸变化时重建 FBO（旧的 GL 对象直接丢弃，resize 不常发生）
+    pub fn resize(&mut self, ctx: &context::Context, w: i32, h: i32) {
+        if self.dims.w == w as f32 && self.dims.h == h as f32 { return }
+        let nf = Framebuffer::new(ctx, true, (w, h), self.offsets);
+        self.fbo = nf.fbo;
+        self.tex = nf.tex;
+        self.dims = nf.dims;
+        self.pixels_len = nf.pixels_len;
+        self.pixels = nf.pixels;
+    }
+
     pub fn bind(&self, _ctx: &context::Context) {
         let (offsetx, offsety) = self.offsets;
         unsafe {
@@ -80,23 +91,30 @@ impl Framebuffer {
         }
     }
 
+    /// 注意：这里的 x 是**行**索引（0..h，回读来自下往上所以要翻转），y 是**列**索引（0..w）。
+    /// 原版索引公式乘的是 h，只在正方形缓冲下成立；这里改成乘 w，支持 128x64 这种宽屏网格。
     pub fn get_pixel(&self, bg: (i32, i32, i32), x: i32, y: i32) -> Option<(u8, u8, u8)> {
-        let w = self.dims.w as _;
-        let h = self.dims.h as _;
-        if x < 0 || x > w || y < 0 || y > h {
+        self.get_pixel_rgba(bg, x, y).map(|(r, g, b, _)| (r, g, b))
+    }
+
+    /// 和 get_pixel 一样，但额外返回 alpha（启用 COLONQ_PARTS 时，alpha 里存的是部位编号）
+    pub fn get_pixel_rgba(&self, bg: (i32, i32, i32), x: i32, y: i32) -> Option<(u8, u8, u8, u8)> {
+        let w = self.dims.w as i32;
+        let h = self.dims.h as i32;
+        if x < 0 || x >= h || y < 0 || y >= w {
             None
         } else {
-            let invx = w - (x + 1);
-            let invy = y;
-            let base_idx = ((invx * 4 * h) + (invy * 4)) as usize;
+            let invx = h - (x + 1);
+            let base_idx = ((invx * w + y) * 4) as usize;
             if base_idx > (w * h * 4) as usize { return None; }
             let r = *self.pixels.get(base_idx)?;
             let g = *self.pixels.get(base_idx + 1)?;
             let b = *self.pixels.get(base_idx + 2)?;
+            let a = *self.pixels.get(base_idx + 3)?;
             if r == (bg.0 as u8) && g == (bg.1 as u8) && b == (bg.2 as u8) {
                 None
             } else {
-                Some((r, g, b))
+                Some((r, g, b, a))
             }
         }
     }
@@ -123,11 +141,19 @@ impl Framebuffer {
     pub fn render_term(&self, ctx: &context::Context, framecount: i32, players: &avatar::PalettePlayers, palette: &avatar::Palette, t: &mut term::Term, c: usize) {
         t.count = c;
         let mut idx = 0;
-        for x in 0..(self.dims.w as _) {
-            for y in 0..(self.dims.h as _) {
-                match self.get_pixel(ctx.bgcolor, x, y) {
-                    Some(col) => {
-                        let (custom, wordref, pal) = palette.lookup(col);
+        let mut emoji_cache: std::collections::HashMap<char, bool> = std::collections::HashMap::new();
+        for x in 0..(self.dims.h as _) {   // x = 行
+            for y in 0..(self.dims.w as _) {   // y = 列
+                match self.get_pixel_rgba(ctx.bgcolor, x, y) {
+                    Some((cr, cg, cb, ca)) => {
+                        let col = (cr, cg, cb);
+                        let (mut custom, mut wordref, pal) = palette.lookup(col);
+                        // 按部位换字符表（部位编号存在 alpha 里，0=没参与部位 pass）
+                        let part_word = palette.part_words.get(&ca);
+                        if let Some(pw) = part_word {
+                            custom = true;
+                            wordref = pw;
+                        }
                         let (r, g, b) = match pal {
                             avatar::PaletteEntry::Color(c) => c,
                             avatar::PaletteEntry::Pattern { width, height, pixels } =>
@@ -154,11 +180,13 @@ impl Framebuffer {
 
                         let wordlen = wordref.chars().count();
                         let mut c1 = wordref.chars().nth(idx % wordlen).unwrap();
-                        let mut is_emoji = emojis::get(&format!("{}", c1)).is_some();
+                        // emoji 查表带一次 String 分配，逐格做很贵；这里按字符缓存
+                        let mut is_emoji = *emoji_cache
+                            .entry(c1)
+                            .or_insert_with(|| emojis::get(&format!("{}", c1)).is_some());
                         idx = idx + 1;
-                        let mut c2 = wordref.chars().nth(idx % wordlen).unwrap();
-                        if emojis::get(&format!("{}", c2)).is_some() { c2 = '.'; }
-                        idx = idx + 1;
+                        // 一格只有一个字符了，c2 只给边缘图案当占位用
+                        let mut c2 = ' ';
 
                         let s = self.get_surrounding(ctx.bgcolor, x, y);
                         if s == 0b01101011 || s == 0b01101111 {
@@ -184,15 +212,14 @@ impl Framebuffer {
                             c1 = '_'; c2 = '_'; is_emoji = false;
                         }
 
-                        if is_emoji {
-                            t.write(y as _, x as _, custom, c1, None, (r, g, b));
-                        } else {
-                            t.write(y as _, x as _, custom, c1, Some(c2), (r, g, b));
-                        }
+                        // 现在是一个像素对一个字符（128 列），
+                        // 所以边缘图案那对字符里挑更有信息量的那个
+                        let ch = if c1 == ' ' && c2 != ' ' { c2 } else { c1 };
+                        t.write(y as _, x as _, custom, ch, None, (r, g, b));
                     },
                     None => {
-                        idx = idx + 2;
-                        t.write(y as _, x as _, false, ' ', Some(' '), (0, 0, 0));
+                        idx = idx + 1;
+                        t.write(y as _, x as _, false, ' ', None, (0, 0, 0));
                     },
                 }
             }
@@ -302,7 +329,7 @@ impl Framebuffer {
                             }
                         },
                         None => {
-                            idx = idx + 2;
+                            idx = idx + 1;
                             write!(output, "{}", "  ".to_owned().on_custom_color(bg)).unwrap();
                         },
                     }
@@ -386,7 +413,7 @@ impl Framebuffer {
                             }
                         },
                         None => {
-                            idx = idx + 2;
+                            idx = idx + 1;
                             write!(stdout, "  ").unwrap();
                         },
                     }
@@ -426,7 +453,7 @@ impl Framebuffer {
                             write!(stdout, "{}", format!("{}{}", c1, c2).truecolor(nr, ng, nb)).unwrap();
                         },
                         None => {
-                            idx = idx + 2;
+                            idx = idx + 1;
                             write!(stdout, "  ").unwrap();
                         },
                     }

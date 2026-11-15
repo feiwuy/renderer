@@ -1,0 +1,174 @@
+# lcolonq/renderer 面捕机制核对
+
+> 2026-11-14。依据作者公开 master 源码及随仓库 vendored 的 OpenSeeFace。
+> 这只能说明这份公开版本，不代表作者今天直播的私有代码与配置完全相同。
+> 本次只研究和记录：未安装依赖、未开启摄像头、未修改当前稳定版 Rust/shader。
+
+## 1. 整条链路
+
+```text
+摄像头（或视频文件）
+    ↓ OpenCV 读取画面
+OpenSeeFace（ONNX 人脸检测/关键点模型）
+    ↓ 估计头部姿态、眼睛张开程度、嘴部特征
+本地 UDP 127.0.0.1:11573
+    ↓ Rust tracking.rs 接收，更新共享状态
+头部骨骼旋转 + blink/oh 两个表情权重
+    ↓ vertex shader 蒙皮与 morph target
+OpenGL 离屏渲染 → ASCII
+    ↓
+上游 st终端；本地稳定版 OBS浏览器源
+```
+
+**不是用真人视频直接贴在模型脸上，也不是把真人脸转成ASCII。**
+画面里始终是VRM模型；摄像头只负责控制旋转和表情数据。
+
+## 2. 作者怎么启动
+
+上游 [launch.sh](https://github.com/lcolonq/renderer/blob/master/launch.sh) 的真实命令：
+
+```sh
+(cd deps/OpenSeeFace/ || exit; steam-run poetry run python facetracker.py -c 1 >/dev/null &)
+../terminal/st -T "Colonq's Face" -e ./run.sh
+```
+
+含义：
+
+- `-c 1` 是摄像头索引1，不能照抄成所有机器都适用；本机应该先选择正确摄像头。
+- `&` 让面捕进程在后台运行，跟Rust渲染进程分开。
+- `steam-run` 是作者NixOS环境的兼容启动方式，不是面捕算法的一部分。
+- `poetry run` 选择Python依赖环境。
+- `st` 只显示ASCII；不做面捕。
+
+## 3. OpenSeeFace实际做什么
+
+[facetracker.py发送逻辑](https://github.com/lcolonq/renderer/blob/master/deps/OpenSeeFace/facetracker.py#L246-L368)：
+
+1. OpenCV读取摄像头帧；
+2. ONNX Runtime运行检测和关键点模型；
+3. 通过关键点及3D参考脸模型，用 `solvePnP` 估计头部姿态；
+4. 根据眼睑、嘴唇关键点计算特征，再打包UDP。
+
+发送的是数字，不是摄像头视频：时间戳、face ID、姿态四元数、眼睛状态、68个二维点、70个三维点及14个表情相关特征。
+正常单脸数据包为 **1785 bytes**。
+
+这份vendored脚本的默认参数：
+
+| 参数 | 默认 |
+|---|---|
+| 摄像头 | 0（作者launch覆盖为1） |
+| 采集目标帧率 | 24fps |
+| 输入尺寸 | 640×360 |
+| 面部关键点模型 | 3 |
+| 最大面部数量 | 1 |
+| 最大线程参数 | 1 |
+| 眼球追踪 | 开启 |
+| 发送地址/端口 | 127.0.0.1:11573 |
+
+ONNX Runtime使用它当前可用的execution providers；安装普通CPU版时就是CPU推理。
+并不是“renderer用了4060，所以面捕也自动用了4060”。
+随仓库已有ONNX模型文件；后续安装Python运行依赖通常不必重新下载这些权重。
+
+## 4. Rust只用了哪些信息
+
+上游 [tracking.rs](https://github.com/lcolonq/renderer/blob/master/src/tracking.rs) 只更新：
+
+| 接收数据 | 用法 |
+|---|---|
+| 头部姿态四元数 | 改变VRM的head骨骼旋转 |
+| 两眼张开程度 | 取平均，再 `1 - average` 得到blink闭眼权重 |
+| mouth_open（代码意图） | clamp到0~1，写入VRM的oh表情 |
+
+上游 [主渲染循环](https://github.com/lcolonq/renderer/blob/master/src/main.rs#L119-L139) 将 `orientation.inverse()` 应用到head骨骼。
+表情权重则被上传到 `expression_blink_weight` / `expression_oh_weight`，由vertex shader混合morph target。
+
+因此这份公开版并没有完整实现：
+
+- 每只眼睛独立眨眼；
+- 根据嘴形识别aa/ih/ou/ee/oh五种发音；
+- 眼球转动跟踪（OpenSeeFace虽发送点位，但Rust没有把它们应用到眼球骨骼）；
+- 眉毛、微笑、悲伤等全部自动表情；
+- 摄像头驱动手臂或身体动作。
+
+happy/angry等11个表情在状态里初始化为0，并不意味着都由面捕驱动。
+
+## 5. 核对到一个上游包偏移问题：嘴巴读错字段
+
+将发送端、Unity参考接收器及Rust偏移计算逐字段对比，并离线构造单脸数据包验证：
+
+| 数据 | 正确起始偏移（byte） |
+|---|---:|
+| 两眼张开程度 | 20 / 24 |
+| 姿态四元数 | 33 |
+| 14个特征区 | 1729 |
+| mouth_open | **1777** |
+| 完整单脸包长度 | 1785 |
+
+上游Rust计算的 `mouth_offset` 是 **1769**，实际对应 `mouth_corner_updown_r`（右嘴角上下），不是mouth_open。
+偏差是8字节。因此严格照抄上游接收器，模型张嘴可能跟着嘴角变化而不是实际开合。
+
+这个问题也存在于当前稳定版接收代码，因为之前尚未接真实摄像头，没在真人数据中验证过它。
+**本次已证实包布局问题，但没有修改稳定版。** 接面捕时应该先修接收器，再测试。
+
+此外接收器目前还缺少：
+
+- 使用 `recv_from` 返回的实际包长度做检查（现在读的是固定大缓冲区）；
+- 过滤3D估计失败、NaN/无效/全零四元数；
+- 多脸时挑选目标face ID；
+- 丢脸或超时后回正/转待机；
+- 正脸中性姿态校准及旋转平滑。
+
+这些比“启动一个Python摄像头脚本”更重要，建议在新开发副本中完善。
+
+## 6. 和当前版本的区别
+
+当前仍有同样的UDP接收线程，入口已存在，OBS推流方式与面捕本身无冲突。
+但当前加了程序生成的待机转头和眨眼：
+
+```text
+头部旋转 = 追踪旋转的inverse × 待机摆动
+眨眼权重 = max(追踪blink, 待机blink)
+```
+
+所以真实面捕接入后若不关待机，角色会同时听从真人和正弦动作，不是纯面捕。
+初次验证建议 `COLONQ_IDLE=0`；后续更好的行为是“有有效追踪数据时真人驱动，丢脸时才回待机”。
+
+上游四元数处理还带固定轴翻转和Euler姿态补偿，这是按作者模型/坐标系调的，不是通用的正脸校准。
+你现在用的是VRM 0.x适配模型，不能假定照抄补偿后它一定朝向正确。
+
+## 7. 当前Python环境的障碍
+
+本次只检测到：
+
+- 系统Python：3.14.10；
+- numpy、OpenCV(cv2)、Pillow已存在；
+- onnxruntime未安装；
+- poetry未安装。
+
+vendored [pyproject.toml](https://github.com/lcolonq/renderer/blob/master/deps/OpenSeeFace/pyproject.toml) 要求 **Python >=3.7,<3.11**，是老项目依赖约束。
+源码还使用 `np.float` 等旧NumPy API。
+
+所以不能再说“直接poetry install就好了”。后续要么建立兼容的独立Python环境，
+要么在新环境中升级/修补OpenSeeFace并实测；不要直接改系统Python或向系统环境随意pip安装。
+
+## 8. 后续接入顺序（尚未执行）
+
+1. 保留已创建的稳定版备份，在新副本中改面捕接收器。
+2. 修mouth_open偏移、包长度/有效性过滤。
+3. 经确认后建立独立Python环境并安装依赖。
+4. 先只运行OpenSeeFace可视化，确认摄像头、眼睛、嘴部信号正常。
+5. 在renderer中关待机、做正脸校准，再核对转头方向/眨眼/张嘴。
+6. 最后接回现有OBS浏览器源，目标帧率仍24，不需要恢复可见SDL窗口。
+
+将来环境准备好后，可参考以下启动参数（**不是现在可以直接运行的保证**）：
+
+```bash
+# 在合适的Python环境中，从deps/OpenSeeFace目录运行；摄像头索引按本机情况选择
+python facetracker.py -c 0 -F 24 -W 640 -H 360 --faces 1 -m 1 -i 127.0.0.1 -p 11573 -v 1
+
+# 在另一个终端中启动renderer；纯面捕初测关闭待机动画
+COLONQ_IDLE=0 ./run-obs.sh
+```
+
+不需要把真人摄像头画面加入OBS；OBS继续显示VRM生成的ASCII。
+本次没有启用摄像头，也没有更改稳定显示配置。

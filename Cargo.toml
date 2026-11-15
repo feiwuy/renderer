@@ -14,7 +14,7 @@ gl_generator = "0.14.0" # opengl bindings
 [dependencies]
 rand = "*" # rng
 bitflags = "*" # C-style bitwise flags
-sdl2 = {version = "*", features = ["image"]} # sdl2 bindings
+sdl2 = "0.35.2" # sdl2 bindings（去掉了 image feature：本项目没用到 SDL2_image，图像解码走 image crate）
 glam = "*" # linear algebra library for opengl
 gltf = {path = "deps/gltf-vrm", features = ["extras", "utils"]} # loader for .gltf models
 tobj = "*" # loader for .obj models
@@ -27,10 +27,9 @@ colors-transform = "*" # parsing and converting colors
 base64 = "*" # base64 encoding
 emojis = "*" # lookup emoji
 image = "*" # decode image
-libmpv-sys = {path = "deps/libmpv-rs/libmpv-sys", features = ["use-bindgen"]} # video playback
+libmpv-sys = {path = "deps/libmpv-rs/libmpv-sys"} # video playback（改用自带的预生成绑定，绕开旧 bindgen 不支持 mpv 0.41 头文件的匿名 union）
 libmpv = {path = "deps/libmpv-rs"} # video playback
 log = "*" # logging
 simple-logging = "*" # logging
 log-panics = { version = "*", features = ["with-backtrace"] } # log panics
 flate2 = "*" # gzip
-tungstenite = { version = "*", features = ["native-tls"] } # websockets

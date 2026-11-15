@@ -1,2 +1,21 @@
 target
 colonq.log
+run.out
+
+# 调试存图（COLONQ_DUMP_PNG / COLONQ_DUMP_SEQ / COLONQ_DUMP_FRAMES 产生）
+frame*.png
+frame-*.bin
+oneframe.txt
+/*.png
+/*.gif
+
+# 本地校验产物与日志
+*.log
+/validation-*/
+
+# 模型不进仓库（体积大，且多为个人素材；用 COLONQ_MODEL 指定本地文件）
+/assets/*.vrm
+
+# Python 缓存
+__pycache__/
+*.pyc

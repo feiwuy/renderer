@@ -63,8 +63,10 @@ pub struct Diff {
 impl Diff {
     pub fn new(old: &Term, new: &Term) -> Self {
         let mut diff = Vec::new();
-        for y in 0..64 {
-            for x in 0..64 {
+        let h = old.h.min(new.h);
+        let w = old.w.min(new.w);
+        for y in 0..h {
+            for x in 0..w {
                 if old.cells[y][x] != new.cells[y][x] {
                     diff.push((x as _, y as _, new.cells[y][x]));
                 }
@@ -98,20 +100,34 @@ impl Diff {
 }
 
 pub struct Term {
-    pub count: usize, 
-    pub cells: [[Cell; 64]; 64],
+    pub count: usize,
+    pub w: usize,
+    pub h: usize,
+    pub cells: Vec<Vec<Cell>>,
 }
 
 impl Term {
-    pub fn new() -> Self {
+    pub fn new(w: usize, h: usize) -> Self {
         Self {
             count: 0,
-            cells: [[Cell::Background; 64]; 64],
+            w,
+            h,
+            cells: vec![vec![Cell::Background; w]; h],
         }
     }
 
+    /// 终端尺寸变化时重建网格（不换对象，方便上层拿着 &mut 引用）
+    pub fn resize(&mut self, w: usize, h: usize) {
+        if self.w == w && self.h == h { return }
+        self.w = w;
+        self.h = h;
+        self.cells = vec![vec![Cell::Background; w]; h];
+    }
+
     pub fn write(&mut self, x: usize, y: usize, custom_glyph: bool, glyph0: char, glyph1: Option<char>, color: (u8, u8, u8)) {
-        self.cells[y][x] = Cell::Foreground { custom_glyph, glyph0, glyph1, color, };
+        if y < self.h && x < self.w {
+            self.cells[y][x] = Cell::Foreground { custom_glyph, glyph0, glyph1, color, };
+        }
     }
 
     pub fn serialize<W>(&self, out: &mut W)
@@ -134,31 +150,60 @@ impl Term {
         ret
     }
 
+    /// 把整帧编码成 ANSI 字节流（不写出去）。
+    /// 主循环用这个 + 独立写线程，避免 pty 写满时把渲染循环阻塞住。
+    pub fn encode_stream(&self, bg: (u8, u8, u8)) -> Vec<u8> {
+        self.encode_stream_sized(crate::display::Size::new(self.w, self.h), bg)
+    }
+
+    /// Downsample only the terminal output, centered and letterboxed; the render/stream grid stays intact.
+    /// Absolute row positions and no trailing newline prevent wrapping/scrolling on small terminals.
+    pub fn encode_stream_sized(&self, bounds: crate::display::Size, bg: (u8, u8, u8)) -> Vec<u8> {
+        let content = crate::display::contain(crate::display::Size::new(self.w, self.h), bounds);
+        let left = (bounds.w - content.w) / 2;
+        let top = (bounds.h - content.h) / 2;
+        let mut output = Vec::new();
+        write!(output, "\x1b[?2026h\x1b[?25l\x1b[48;2;{};{};{}m", bg.0, bg.1, bg.2).unwrap();
+        let mut current_color = None;
+        for y in 0..bounds.h {
+            write!(output, "\x1b[{};1H", y + 1).unwrap();
+            for x in 0..bounds.w {
+                let (glyph, color) = if x >= left && x < left + content.w
+                    && y >= top && y < top + content.h {
+                    let sx = ((x - left) * self.w / content.w).min(self.w - 1);
+                    let sy = ((y - top) * self.h / content.h).min(self.h - 1);
+                    match self.cells[sy][sx] {
+                        Cell::Foreground { glyph0, color, .. } => (glyph0, color),
+                        Cell::Background => (' ', bg),
+                    }
+                } else { (' ', bg) };
+                if current_color != Some(color) {
+                    write!(output, "\x1b[38;2;{};{};{}m", color.0, color.1, color.2).unwrap();
+                    current_color = Some(color);
+                }
+                write!(output, "{}", glyph).unwrap();
+            }
+            // Erase stale columns from the previous wider frame, keeping the configured background.
+            write!(output, "\x1b[K").unwrap();
+        }
+        write!(output, "\x1b[J\x1b[?2026l").unwrap();
+        output
+    }
+
+    /// 导出当前帧的字符快照，给本地推流服务用
+    pub fn snapshot(&self) -> Vec<Vec<(char, (u8, u8, u8))>> {
+        self.cells.iter().map(|row| {
+            row.iter().map(|cell| match cell {
+                Cell::Foreground { glyph0, color, .. } => (*glyph0, *color),
+                Cell::Background => (' ', (0, 0, 0)),
+            }).collect()
+        }).collect()
+    }
+
     pub fn render_stream<W>(&self, out: &mut W, bg: (u8, u8, u8))
     where W: Write {
-        let bgcolor = colored::customcolors::CustomColor::new(bg.0, bg.1, bg.2);
-        let mut output: Vec<u8> = Vec::new();
-        write!(output, "\x1b[2J\x1b[1;1H").unwrap();
-        for row in self.cells.iter() {
-            for cell in row.iter() {
-                match cell {
-                    Cell::Foreground { custom_glyph: _, glyph0, glyph1, color } => {
-                        let s = if let Some(g) = glyph1 {
-                            format!("{}{}", glyph0, g)
-                        } else {
-                            format!("{}", glyph0)
-                        };
-                        write!(
-                            output, "{}",
-                            s.truecolor(color.0, color.1, color.2).on_custom_color(bgcolor)
-                        ).unwrap();
-                    },
-                    Cell::Background => {},
-                }
-            }
-            write!(output, "\r\n").unwrap();
-        }
-        out.write(&output).unwrap();
+        let buf = self.encode_stream(bg);
+        out.write(&buf).unwrap();
     }
 
     pub fn render_stream_nocolor<W>(&self, out: &mut W)
@@ -233,5 +278,37 @@ impl Term {
             write!(output, "\r\n").unwrap();
         }
         out.write(&output).unwrap();
+    }
+}
+
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+    use crate::display::Size;
+
+    #[test]
+    fn small_terminal_is_safe_and_snapshot_keeps_source_resolution() {
+        let mut term = Term::new(128, 64);
+        term.write(64, 32, false, '@', None, (254, 200, 101));
+        let bytes = term.encode_stream_sized(Size::new(46, 20), (0, 0, 0));
+        let text = String::from_utf8(bytes).unwrap();
+        assert!(!text.contains('\n'));
+        assert!(!text.contains("\x1b[21;1H"));
+        assert!(text.contains("\x1b[20;1H"));
+        let snapshot = term.snapshot();
+        assert_eq!(snapshot.len(), 64);
+        assert_eq!(snapshot[0].len(), 128);
+        assert_eq!(snapshot[32][64], ('@', (254, 200, 101)));
+    }
+
+    #[test]
+    fn full_size_output_keeps_rgb_values() {
+        let mut term = Term::new(2, 1);
+        term.write(1, 0, false, 'A', None, (255, 128, 254));
+        let text = String::from_utf8(term.encode_stream((21, 5, 15))).unwrap();
+        assert!(text.contains("\x1b[48;2;21;5;15m"));
+        assert!(text.contains("\x1b[38;2;255;128;254mA"));
+        assert!(!text.contains('\n'));
     }
 }

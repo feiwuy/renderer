@@ -53,13 +53,21 @@ pub struct VideoPlayer<'a> {
 }
 
 impl<'a> VideoPlayer<'a> {
-    pub fn new(ctx: &Context) -> Self {
-        let mpv = Box::leak(Box::new(libmpv::Mpv::new().unwrap()));
-        mpv.set_property("mute", "yes").unwrap();
-        mpv.set_property("keepaspect", "no").unwrap();
-        mpv.set_property("loop", "inf").unwrap();
-        mpv.set_property("video-timing-offset", 0).unwrap();
-        mpv.set_property("ytdl-format", "bestvideo[height=?144][fps<=?30][vcodec!=?vp9]+bestaudio/best").unwrap();
+    /// 失败时返回 None：某些驱动组合下 libmpv 的 GL 渲染上下文创建不出来，
+    /// 这时视频填充不可用，但角色渲染应该照常工作
+    pub fn new(ctx: &Context) -> Option<Self> {
+        let mpv = match libmpv::Mpv::new() {
+            Ok(m) => Box::leak(Box::new(m)),
+            Err(e) => { log::warn!("libmpv 初始化失败：{}，视频填充不可用", e); return None; }
+        };
+        // 这些属性失败不影响主功能，失败就跳过
+        for (k, v) in [("mute", "yes"), ("keepaspect", "no"), ("loop", "inf")] {
+            if let Err(e) = mpv.set_property(k, v) {
+                log::debug!("mpv set_property {} 失败: {}", k, e);
+            }
+        }
+        let _ = mpv.set_property("video-timing-offset", 0);
+        let _ = mpv.set_property("ytdl-format", "bestvideo[height=?144][fps<=?30][vcodec!=?vp9]+bestaudio/best");
         let mpv_render_context = libmpv::render::RenderContext::new(
             unsafe { mpv.ctx.as_mut() },
             vec![
@@ -69,16 +77,23 @@ impl<'a> VideoPlayer<'a> {
                     ctx: &ctx.video,
                 }),
             ],
-        ).unwrap();
+        );
+        let mpv_render_context = match mpv_render_context {
+            Ok(r) => r,
+            Err(e) => {
+                log::warn!("mpv GL 渲染上下文创建失败：{}（显卡驱动/PRIME 下常见），视频填充不可用", e);
+                return None;
+            }
+        };
         let mpv_event_context = mpv.create_event_context();
         let fb = framebuffer::Framebuffer::new(&ctx, false, (114, 64), (0, 0));
 
-        Self {
+        Some(Self {
             fb,
             mpv,
             mpv_render_context,
             mpv_event_context,
-        }
+        })
     }
 
     pub fn update(&mut self, ctx: &Context) {
@@ -116,9 +131,9 @@ impl<'a> VideoPlayer<'a> {
 pub struct Context {
     pub sdl2: sdl2::Sdl,
     pub video: sdl2::VideoSubsystem,
-    pub image: sdl2::image::Sdl2ImageContext,
     pub gl_context: sdl2::video::GLContext,
     pub window: sdl2::video::Window,
+    pub preview_enabled: bool,
     pub clearcolor: Rgb,
     pub bgcolor: (i32, i32, i32),
     pub dims: utils::Dimensions,
@@ -133,9 +148,8 @@ pub fn get_proc_address(
 
 impl Context {
     pub fn new() -> Self {
-        let sdl2 = sdl2::init().unwrap();
-        let video = sdl2.video().unwrap();
-        let image = sdl2::image::init(sdl2::image::InitFlag::PNG).unwrap();
+        let sdl2 = sdl2::init().expect("SDL 初始化失败");
+        let video = sdl2.video().expect("SDL video 子系统初始化失败（没有可用显示？）");
         // sdl2.mouse().set_relative_mouse_mode(true);
         // sdl2::hint::set("SDL_HINT_MOUSE_RELATIVE_MODE_WARP", "1");
 
@@ -143,14 +157,43 @@ impl Context {
         // gl_attr.set_context_major_version(3);
         // gl_attr.set_context_minor_version(2);
 
-        let window = video
-            .window("colonq", 640 as _, 360 as _)
-            .opengl()
-        // .fullscreen_desktop()
-            .build()
-            .unwrap();
-        let gl_context = window.gl_create_context().unwrap();
+        // A stream does not need a presented SDL surface. Hidden/off-screen windows can
+        // block swap on Wayland; never use their frame callbacks to clock the renderer.
+        let serving = std::env::var("COLONQ_SERVE").ok()
+            .and_then(|v| v.trim().parse::<u16>().ok()).is_some();
+        let preview_enabled = std::env::var("COLONQ_PREVIEW")
+            .map(|v| v != "0").unwrap_or(!serving);
+        let mut builder = video.window("colonq", 640, 360);
+        builder.opengl();
+        if !preview_enabled { builder.hidden(); }
+        let window = builder.build().expect("创建 SDL GL 窗口失败");
+        let gl_context = window.gl_create_context()
+            .expect("创建 OpenGL 上下文失败（显卡驱动/PRIME/会话环境问题）");
+
+        // This must happen AFTER the GL context is current. Previously this call was
+        // made before context creation and its failure was silently ignored.
+        let vsync = std::env::var("COLONQ_VSYNC").map(|v| v != "0").unwrap_or(false);
+        if let Err(e) = video.gl_set_swap_interval(if vsync { 1 } else { 0 }) {
+            log::warn!("设置 GL swap interval 失败: {}；推流无预览模式不调用 swap", e);
+        }
+        log::info!("SDL 预览: {}；窗口交换: {}",
+            if preview_enabled { "显示" } else { "隐藏" },
+            if preview_enabled { "开启" } else { "禁用（推流不依赖窗口可见性）" });
         gl::load_with(|s| video.gl_get_proc_address(s) as *const std::ffi::c_void);
+
+        // 直接问驱动实际用的是哪个渲染器（llvmpipe = 软件渲染，说明没走显卡）
+        unsafe {
+            use std::ffi::CStr;
+            let get = |e: gl::types::GLenum| {
+                let p = gl::GetString(e);
+                if p.is_null() { return "?".to_string() }
+                CStr::from_ptr(p as *const i8).to_string_lossy().into_owned()
+            };
+            log::info!(
+                "GL 后端: vendor={} | renderer={} | version={}",
+                get(gl::VENDOR), get(gl::RENDERER), get(gl::VERSION)
+            );
+        }
 
         let (winw, winh) = window.size();
 
@@ -168,12 +211,24 @@ impl Context {
             ("blink".to_owned(), 15),
         ]);
 
+        // 背景色：COLONQ_BGCOLOR=000000 / #000000 之类；留空或写错就退回默认（原作者的深紫）
         let rgb = match env::var("COLONQ_BGCOLOR") {
             Ok(colorstr) => {
-                Rgb::from_hex_str(&colorstr).unwrap()
+                let c = colorstr.trim();
+                if c.is_empty() {
+                    Rgb::from(0x00 as _, 0x00 as _, 0x00 as _)
+                } else {
+                    match Rgb::from_hex_str(c) {
+                        Ok(rgb) => rgb,
+                        Err(_) => {
+                            log::warn!("COLONQ_BGCOLOR={:?} 解析失败，用默认背景色", colorstr);
+                            Rgb::from(0x00 as _, 0x00 as _, 0x00 as _)
+                        }
+                    }
+                }
             },
             Err(_) => {
-                Rgb::from(0x15 as _, 0x05 as _, 0x0f as _)
+                Rgb::from(0x00 as _, 0x00 as _, 0x00 as _) // 默认纯黑（原作者是 0x15050f 深紫）
             },
         };
 
@@ -193,9 +248,9 @@ impl Context {
         Self {
             sdl2,
             video,
-            image,
             gl_context,
             window,
+            preview_enabled,
             clearcolor: rgb,
 
             bgcolor: (rgb.get_red() as _, rgb.get_green() as _, rgb.get_blue() as _),

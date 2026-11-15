@@ -12,7 +12,7 @@ pub struct Hat {
 impl Hat {
     pub fn cone(ctx: &context::Context) -> Self {
         Self {
-            shader: shader::Shader::new(&ctx, "../assets/shadercone.vert", "../assets/shadercone.frag"),
+            shader: shader::Shader::new(&ctx, "../assets/shadercone.vert", "../assets/shadercone.frag", 64, f32::NEG_INFINITY),
             mesh: mesh::Mesh::new(std::path::Path::new("../assets/cone.obj")).unwrap(),
             texture: None,
             position: glam::Mat4::from_scale_rotation_translation(
@@ -72,7 +72,7 @@ pub struct Pumpkin {
 impl Pumpkin {
     pub fn new(ctx: &context::Context) -> Self {
         Self {
-            shader: shader::Shader::new(&ctx, "../assets/shaderpumpkin.vert", "../assets/shaderpumpkin.frag"),
+            shader: shader::Shader::new(&ctx, "../assets/shaderpumpkin.vert", "../assets/shaderpumpkin.frag", 64, f32::NEG_INFINITY),
             mesh: mesh::Mesh::new(std::path::Path::new("../assets/cube.obj")).unwrap(),
             texture: Some(texture::Texture::new(&ctx, "/home/llll/src/pumpkin/table/pumpkin.png")),
             position: glam::Mat4::from_scale_rotation_translation(

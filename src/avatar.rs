@@ -89,15 +89,23 @@ pub struct PalettePlayers {
 
 impl PalettePlayers {
     pub fn new(ctx: &context::Context) -> Self {
-        Self {
-            players: HashMap::from([
-                (context::PaletteType::Hair, context::VideoPlayer::new(&ctx)),
-                (context::PaletteType::Skin, context::VideoPlayer::new(&ctx)),
-                (context::PaletteType::Eyes, context::VideoPlayer::new(&ctx)),
-                (context::PaletteType::Highlight, context::VideoPlayer::new(&ctx)),
-                (context::PaletteType::PartyHat, context::VideoPlayer::new(&ctx)),
-            ]),
+        // COLONQ_NO_MPV=1：完全不创建 libmpv 实例（每个实例会带若干线程和几十 MB 内存）
+        if std::env::var("COLONQ_NO_MPV").is_ok() {
+            log::info!("COLONQ_NO_MPV：跳过 libmpv 初始化（视频填充不可用，省内存/线程）");
+            return Self { players: HashMap::new() };
         }
+        // 任意一个创建失败都不致命，缺的只是对应部位的视频填充
+        // 注意 edition 2018 下数组的 into_iter 会给引用，这里用 Vec
+        let players: HashMap<context::PaletteType, context::VideoPlayer> = vec![
+            context::PaletteType::Hair,
+            context::PaletteType::Skin,
+            context::PaletteType::Eyes,
+            context::PaletteType::Highlight,
+            context::PaletteType::PartyHat,
+        ].into_iter().filter_map(|pty| {
+            context::VideoPlayer::new(&ctx).map(move |p| (pty, p))
+        }).collect();
+        Self { players }
     }
 
     pub fn update(&mut self, ctx: &context::Context, palette: &Palette) {
@@ -114,6 +122,8 @@ impl PalettePlayers {
 
 pub struct Palette {
     pub default_word: String,
+    /// 部位编号 -> 用哪套字符（author 的调色板按 Hair/Eyes/Skin/… 分表，这里是通用版）
+    pub part_words: HashMap<u8, String>,
     pub word_mapping: HashMap<context::PaletteType, String>,
     pub color_mapping: HashMap<context::PaletteType, PaletteEntry>,
 }
@@ -122,6 +132,7 @@ impl Palette {
     pub fn new() -> Self {
         Self {
             default_word: "lcolonq".to_owned(),
+            part_words: HashMap::new(),
             word_mapping: HashMap::new(),
             color_mapping: HashMap::from([
             ]),
@@ -175,8 +186,10 @@ impl Avatar {
     // }
     
     pub fn transform_bone(&mut self, nm: &str, t: &glam::Mat4) {
-        let ni = self.scene.bone_node_indices.get(nm).unwrap();
-        self.nodes[*ni].transform = self.scene.nodes[*ni].transform.mul_mat4(t);
+        // 模型可能没有某根骨骼（比如非人形模型），此时跳过而不是 panic
+        if let Some(ni) = self.scene.bone_node_indices.get(nm) {
+            self.nodes[*ni].transform = self.scene.nodes[*ni].transform.mul_mat4(t);
+        }
     }
 
     pub fn render(&self, ctx: &context::Context, shader: &shader::Shader, view: &glam::Mat4, projection: &glam::Mat4, sts: &fig::Control) {
