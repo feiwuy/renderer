@@ -136,6 +136,11 @@ COLONQ_TRACK_BIND=0.0.0.0:11573 COLONQ_IDLE=0 \
 **⑥ OpenCV 别铺满多核**
 `mjpeg_to_raw.py` 新增 `--threads`（默认 1）：限制 OpenCV 内部线程，避免 resize/cvtColor 瞬间占满全部核心。
 
+> ⚠️ 代价是**解码吞吐**：`--threads 1` 时如果 `源 X fps` 掉到 20 以下（正常情况下源应接近 24-25），
+> 说明瓶颈在解码而不是推理。这时把 `--threads` 调回 `0`（OpenCV 按核数）或 `2`，
+> 帧率会回到 24；推理侧仍保持 `-m 1`，噪音的大头（推理）依然被压住了。
+> 想要 30 fps 更顺滑时同理：先确认 `--threads 0` 下源 fps 能到 30，再改 `--fps 30 -F 30`。
+
 ### 推荐的低功耗启动组合
 
 ```bash

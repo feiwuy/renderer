@@ -39,14 +39,19 @@ class LatestFrame:
         self.consumed_seq = 0      # 取用方最后拿走的帧号
         self.dropped = 0           # 还没被取用就被新帧覆盖掉的帧数（真正的积压丢弃）
         self.reconnects = 0
-        self.thread = threading.Thread(target=self._run, daemon=True)
+        # 非 daemon：退出时显式 join。daemon 线程在 Ctrl-C 后仍卡在 cv2.read() 的
+        # C++ 调用里，解释器收尾时会 abort（FATAL: exception not rethrown）。
+        self.thread = threading.Thread(target=self._run, daemon=False)
 
     def start(self):
         self.thread.start()
         return self
 
-    def stop(self):
+    def stop(self, join_timeout=2.0):
+        """请求读线程退出并等它收尾（最多等 join_timeout 秒）。"""
         self.stopped = True
+        if self.thread.is_alive():
+            self.thread.join(timeout=join_timeout)
 
     def _open(self):
         for url in self.candidates:
@@ -91,6 +96,8 @@ class LatestFrame:
                 self.frame = frame
                 self.captured += 1
                 self.seq += 1
+            if self.stopped:
+                break
         if cap is not None:
             cap.release()
 
@@ -182,6 +189,7 @@ def main():
                       file=sys.stderr)
                 sys.stderr.flush()
     except KeyboardInterrupt:
+        print('\n收到 Ctrl-C，正在关闭…', file=sys.stderr)
         return 0
     except BrokenPipeError:
         # 下游（head 管道测试 / facetracker 退出）关闭了管道：正常结束，不是错误
