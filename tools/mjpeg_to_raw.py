@@ -110,7 +110,16 @@ def main():
     parser.add_argument('--fps', type=float, default=24.0, help='输出节流帧率')
     parser.add_argument('--report-seconds', type=float, default=10.0,
                         help='每隔多少秒打印一次统计（0 = 不打印）')
+    parser.add_argument('--threads', type=int, default=1,
+                        help='OpenCV 内部线程数（0 = 用 OpenCV 默认值，通常等于核数）。'
+                             '默认 1：解码/resize 不铺满多核，机器更安静、风扇更小；'
+                             '想榨速度再设 0')
     args = parser.parse_args()
+
+    if args.threads > 0:
+        # OpenCV 默认会用满所有核心做 resize/cvtColor 这类并行循环，
+        # 在小机器上表现为「核心瞬间全开 → 风扇转速一直不降」。
+        cv2.setNumThreads(args.threads)
 
     # 多个候选 URL，逐个尝试直到能读出帧
     candidates = [args.url]
@@ -119,6 +128,7 @@ def main():
         if base + extra not in candidates:
             candidates.append(base + extra)
 
+    print(f'OpenCV 线程数: {"默认（按核数）" if args.threads <= 0 else args.threads}', file=sys.stderr)
     source = LatestFrame(args.url, candidates).start()
 
     frame_duration = 1.0 / max(args.fps, 0.1)

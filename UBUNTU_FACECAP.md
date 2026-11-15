@@ -110,3 +110,55 @@ COLONQ_TRACK_BIND=0.0.0.0:11573 COLONQ_IDLE=0 \
 - mouth_open 只驱动 `oh`；`aa/ih/ee` 等口型在本公开版 renderer 中未接线（上游就这样）。
 - 上游四元数轴补偿按作者模型调的；你的 VRM 0.x 适配模型若转向相反，调 `COLONQ_YAW` 或补偿逻辑。
 - 服务器重装/内核升级不影响面捕（没有内核模块依赖）；`~/OpenSeeFace` 和 `~/osf-env` 建议纳入你的备份。
+
+## 7. 降 CPU 占用 / 降风扇噪音
+
+面捕跑在服务器上时风扇吵，通常是「持续多核满载」。先搞清几个容易踩的点：
+
+**① `-m` 不是选模型，是线程数**
+`-m/--max-threads`（默认 1）控制 onnxruntime 的 intra-op 线程数（内部 `min(max_threads, 4)`）。
+模型是 `--model`（默认 **3**，对应 `lm_model3_opt.onnx` 13.5 MB，属于偏重的档位）。
+所以 `-m 2` 是"用 2 个线程跑默认模型 3"，不是"用模型 2"。
+
+**② 多线程不会省电，反而更吵**
+核心参与得越多，功耗和风扇转速越高。要安静就**限制**线程：`-m 1`。
+
+**③ 默认开着凝视模型，本渲染器用不到**
+`--gaze-tracking` 默认 1，每帧多跑一个 `mnv3_gaze32_split` 推理；renderer 只用四元数 / 眨眼 / 张嘴，
+用不上凝视 → 设 `--gaze-tracking 0`，白赚。
+
+**④ 定期人脸复检**
+`--scan-every`（默认 3）表示每 3 帧重新检测一次人脸。单人、机位固定时可以放大到 10~30。
+
+**⑤ 分辨率和管道带宽**
+640×360×3×24 ≈ 16.6 MB/s 要在管道里过。降到 480×270 后解码、resize、带宽都降约 44%。
+
+**⑥ OpenCV 别铺满多核**
+`mjpeg_to_raw.py` 新增 `--threads`（默认 1）：限制 OpenCV 内部线程，避免 resize/cvtColor 瞬间占满全部核心。
+
+### 推荐的低功耗启动组合
+
+```bash
+~/osf-env/bin/python mjpeg_to_raw.py --url http://192.168.1.210:4747/video \
+    --width 480 --height 270 --fps 24 --threads 1 \
+  | ~/osf-env/bin/python facetracker.py --raw-rgb 1 -W 480 -H 270 -F 24 \
+    --faces 1 -m 1 --model -1 --gaze-tracking 0 --scan-every 10 \
+    -i 192.168.1.100 -p 11573 --silent 1
+```
+
+- `-m 1`：推理单线程（最省电）
+- `--model -1`：比默认模型 3 轻；不够轻再试 `--model -2`（更快，精度略降）
+- `--gaze-tracking 0`：去掉凝视推理
+- `--scan-every 10`：减少人脸复检
+- `-W/-H` 必须和 `mjpeg_to_raw.py` 的 `--width/--height` 一致
+
+### 怎么挑模型：让它自己报速度
+
+```bash
+cd ~/OpenSeeFace && ~/osf-env/bin/python facetracker.py --benchmark 1
+```
+
+会依次跑各模型并打印每帧耗时。挑「能达到 24 fps 的最快模型」即可——超过 24 fps 的部分都是白烧 CPU。
+也可以直接看 `--log-data`/`top` 的 %CPU 对比改动前后。
+
+降不动、又想要 30 fps 以上时，才考虑加线程（`-m 4`）；代价是风扇会更响。
