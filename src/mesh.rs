@@ -27,7 +27,14 @@ impl Mesh {
                 gl::STATIC_DRAW,
             );
             gl::BindBuffer(gl::ARRAY_BUFFER, vertices);
-            gl::VertexAttribPointer(utils::ATTRIB_VERTEX, 3, gl::FLOAT, false as u8, 0, 0 as *const c_void);
+            gl::VertexAttribPointer(
+                utils::ATTRIB_VERTEX,
+                3,
+                gl::FLOAT,
+                false as u8,
+                0,
+                0 as *const c_void,
+            );
             gl::EnableVertexAttribArray(utils::ATTRIB_VERTEX);
 
             let mut normals: gl::types::GLuint = 0;
@@ -40,7 +47,14 @@ impl Mesh {
                 gl::STATIC_DRAW,
             );
             gl::BindBuffer(gl::ARRAY_BUFFER, normals);
-            gl::VertexAttribPointer(utils::ATTRIB_NORMAL, 3, gl::FLOAT, false as u8, 0, 0 as *const c_void);
+            gl::VertexAttribPointer(
+                utils::ATTRIB_NORMAL,
+                3,
+                gl::FLOAT,
+                false as u8,
+                0,
+                0 as *const c_void,
+            );
             gl::EnableVertexAttribArray(utils::ATTRIB_NORMAL);
 
             let mut texcoords: gl::types::GLuint = 0;
@@ -53,7 +67,14 @@ impl Mesh {
                 gl::STATIC_DRAW,
             );
             gl::BindBuffer(gl::ARRAY_BUFFER, texcoords);
-            gl::VertexAttribPointer(utils::ATTRIB_TEXCOORD, 2, gl::FLOAT, false as u8, 0, 0 as *const c_void);
+            gl::VertexAttribPointer(
+                utils::ATTRIB_TEXCOORD,
+                2,
+                gl::FLOAT,
+                false as u8,
+                0,
+                0 as *const c_void,
+            );
             gl::EnableVertexAttribArray(utils::ATTRIB_TEXCOORD);
 
             let mut indices: gl::types::GLuint = 0;
@@ -84,7 +105,12 @@ impl Mesh {
     pub fn render(&self) {
         unsafe {
             gl::BindVertexArray(self.vao);
-            gl::DrawElements(gl::TRIANGLES, self.mesh.indices.len() as i32, gl::UNSIGNED_INT, 0 as *const c_void);
+            gl::DrawElements(
+                gl::TRIANGLES,
+                self.mesh.indices.len() as i32,
+                gl::UNSIGNED_INT,
+                0 as *const c_void,
+            );
         }
     }
 }

@@ -1,5 +1,4 @@
-use crate::{gl, context};
-
+use crate::{context, gl};
 
 pub struct Texture {
     pub tid: gl::types::GLuint,
@@ -27,7 +26,7 @@ impl Texture {
                 0,
                 gl::RGBA,
                 gl::UNSIGNED_BYTE,
-                pixels.as_ptr() as *const std::ffi::c_void
+                pixels.as_ptr() as *const std::ffi::c_void,
             );
             gl::GenerateMipmap(gl::TEXTURE_2D);
         }
@@ -49,7 +48,7 @@ impl Texture {
                 0,
                 gl::RGBA,
                 gl::UNSIGNED_BYTE,
-                pixels.as_ptr() as *const std::ffi::c_void
+                pixels.as_ptr() as *const std::ffi::c_void,
             );
             gl::GenerateMipmap(gl::TEXTURE_2D);
         }

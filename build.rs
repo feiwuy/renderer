@@ -12,7 +12,13 @@ fn main() {
     let path = Path::new(&dest).join("bindings.rs");
     let mut file = File::create(&path).unwrap();
 
-    Registry::new(Api::Gl, (4, 6), Profile::Core, Fallbacks::All, ["GL_EXT_texture_filter_anisotropic"])
-        .write_bindings(GlobalGenerator, &mut file)
-        .unwrap();
+    Registry::new(
+        Api::Gl,
+        (4, 6),
+        Profile::Core,
+        Fallbacks::All,
+        ["GL_EXT_texture_filter_anisotropic"],
+    )
+    .write_bindings(GlobalGenerator, &mut file)
+    .unwrap();
 }

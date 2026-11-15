@@ -1,4 +1,4 @@
-use crate::{gl, utils, context};
+use crate::{context, gl, utils};
 
 use std::collections::HashMap;
 
@@ -72,7 +72,13 @@ impl Shader {
         }
     }
 
-    pub fn new(ctx: &context::Context, vtxpath: &str, fragpath: &str, joints_hint: i32, clip_y: f32) -> Self {
+    pub fn new(
+        ctx: &context::Context,
+        vtxpath: &str,
+        fragpath: &str,
+        joints_hint: i32,
+        clip_y: f32,
+    ) -> Self {
         unsafe {
             let prog = gl::CreateProgram();
 
@@ -80,8 +86,11 @@ impl Shader {
             let max_joints: i32 = utils::env_parse::<i32>("COLONQ_MAX_JOINTS")
                 .unwrap_or_else(|| ((joints_hint + 3) / 4 * 4).max(32))
                 .clamp(16, 256);
-            log::info!("joint_matrices 数组大小: {}（{} 个常量寄存器 / NVIDIA 上限 1024）",
-                       max_joints, max_joints * 4);
+            log::info!(
+                "joint_matrices 数组大小: {}（{} 个常量寄存器 / NVIDIA 上限 1024）",
+                max_joints,
+                max_joints * 4
+            );
             // 把骨骼数组长度以宏的形式注入，避免吃光 NVIDIA 的常量寄存器
             let define = format!("#version 330 core\n#define MAX_JOINTS {}\n", max_joints);
             let vtxsrc = std::fs::read_to_string(vtxpath).unwrap();
@@ -89,7 +98,8 @@ impl Shader {
             let vtxsrc = format!(
                 "{}{}\n",
                 define,
-                vtxsrc.lines()
+                vtxsrc
+                    .lines()
                     .filter(|l| !l.trim_start().starts_with("#version"))
                     .collect::<Vec<_>>()
                     .join("\n")
@@ -119,50 +129,125 @@ impl Shader {
             gl::AttachShader(prog, frag);
             gl::DeleteShader(frag);
 
-            gl::BindAttribLocation(prog, utils::ATTRIB_VERTEX, b"vertex\0".as_ptr() as *const i8);
-            gl::BindAttribLocation(prog, utils::ATTRIB_NORMAL, b"normal\0".as_ptr() as *const i8);
-            gl::BindAttribLocation(prog, utils::ATTRIB_TEXCOORD, b"texcoord\0".as_ptr() as *const i8);
+            gl::BindAttribLocation(
+                prog,
+                utils::ATTRIB_VERTEX,
+                b"vertex\0".as_ptr() as *const i8,
+            );
+            gl::BindAttribLocation(
+                prog,
+                utils::ATTRIB_NORMAL,
+                b"normal\0".as_ptr() as *const i8,
+            );
+            gl::BindAttribLocation(
+                prog,
+                utils::ATTRIB_TEXCOORD,
+                b"texcoord\0".as_ptr() as *const i8,
+            );
             gl::BindAttribLocation(prog, utils::ATTRIB_JOINT, b"joint\0".as_ptr() as *const i8);
-            gl::BindAttribLocation(prog, utils::ATTRIB_WEIGHT, b"weight\0".as_ptr() as *const i8);
+            gl::BindAttribLocation(
+                prog,
+                utils::ATTRIB_WEIGHT,
+                b"weight\0".as_ptr() as *const i8,
+            );
 
             gl::LinkProgram(prog);
             Self::check_link_error(prog);
 
             for (enm, attrib) in &ctx.attrib_expressions {
-                gl::BindAttribLocation(prog, *attrib, format!("expression_{}_vertex\0", enm).as_ptr() as *const i8);
+                gl::BindAttribLocation(
+                    prog,
+                    *attrib,
+                    format!("expression_{}_vertex\0", enm).as_ptr() as *const i8,
+                );
             }
 
-            let uniform_expressions = ctx.attrib_expressions.iter().map(|(enm, _)| {
-                (enm.clone(), gl::GetUniformLocation(prog, format!("expression_{}_weight\0", enm).as_ptr() as *const i8))
-            }).collect();
+            let uniform_expressions = ctx
+                .attrib_expressions
+                .iter()
+                .map(|(enm, _)| {
+                    (
+                        enm.clone(),
+                        gl::GetUniformLocation(
+                            prog,
+                            format!("expression_{}_weight\0", enm).as_ptr() as *const i8,
+                        ),
+                    )
+                })
+                .collect();
 
             Self {
                 prog,
                 uniform_view: gl::GetUniformLocation(prog, b"view\0".as_ptr() as *const i8),
                 uniform_position: gl::GetUniformLocation(prog, b"position\0".as_ptr() as *const i8),
-                uniform_projection: gl::GetUniformLocation(prog, b"projection\0".as_ptr() as *const i8),
-                uniform_normal: gl::GetUniformLocation(prog, b"normal_matrix\0".as_ptr() as *const i8),
-                uniform_camera_pos: gl::GetUniformLocation(prog, b"camera_pos\0".as_ptr() as *const i8),
-                uniform_base_color: gl::GetUniformLocation(prog, b"base_color\0".as_ptr() as *const i8),
+                uniform_projection: gl::GetUniformLocation(
+                    prog,
+                    b"projection\0".as_ptr() as *const i8,
+                ),
+                uniform_normal: gl::GetUniformLocation(
+                    prog,
+                    b"normal_matrix\0".as_ptr() as *const i8,
+                ),
+                uniform_camera_pos: gl::GetUniformLocation(
+                    prog,
+                    b"camera_pos\0".as_ptr() as *const i8,
+                ),
+                uniform_base_color: gl::GetUniformLocation(
+                    prog,
+                    b"base_color\0".as_ptr() as *const i8,
+                ),
                 uniform_exposure: gl::GetUniformLocation(prog, b"exposure\0".as_ptr() as *const i8),
-                uniform_saturation: gl::GetUniformLocation(prog, b"saturation\0".as_ptr() as *const i8),
+                uniform_saturation: gl::GetUniformLocation(
+                    prog,
+                    b"saturation\0".as_ptr() as *const i8,
+                ),
                 uniform_contrast: gl::GetUniformLocation(prog, b"contrast\0".as_ptr() as *const i8),
-                uniform_skin_tint: gl::GetUniformLocation(prog, b"skin_tint\0".as_ptr() as *const i8),
+                uniform_skin_tint: gl::GetUniformLocation(
+                    prog,
+                    b"skin_tint\0".as_ptr() as *const i8,
+                ),
                 uniform_skin_sat: gl::GetUniformLocation(prog, b"skin_sat\0".as_ptr() as *const i8),
                 uniform_lift: gl::GetUniformLocation(prog, b"shade_lift\0".as_ptr() as *const i8),
-                uniform_toony: gl::GetUniformLocation(prog, b"shading_toony\0".as_ptr() as *const i8),
-                uniform_shift: gl::GetUniformLocation(prog, b"shading_shift\0".as_ptr() as *const i8),
-                uniform_shade_tint: gl::GetUniformLocation(prog, b"shade_tint\0".as_ptr() as *const i8),
+                uniform_toony: gl::GetUniformLocation(
+                    prog,
+                    b"shading_toony\0".as_ptr() as *const i8,
+                ),
+                uniform_shift: gl::GetUniformLocation(
+                    prog,
+                    b"shading_shift\0".as_ptr() as *const i8,
+                ),
+                uniform_shade_tint: gl::GetUniformLocation(
+                    prog,
+                    b"shade_tint\0".as_ptr() as *const i8,
+                ),
                 uniform_rim: gl::GetUniformLocation(prog, b"rim_strength\0".as_ptr() as *const i8),
-                uniform_outline_width: gl::GetUniformLocation(prog, b"outline_width\0".as_ptr() as *const i8),
-                uniform_outline_color: gl::GetUniformLocation(prog, b"outline_color\0".as_ptr() as *const i8),
-                uniform_outline_pass: gl::GetUniformLocation(prog, b"outline_pass\0".as_ptr() as *const i8),
-                uniform_outline_glow: gl::GetUniformLocation(prog, b"outline_glow\0".as_ptr() as *const i8),
+                uniform_outline_width: gl::GetUniformLocation(
+                    prog,
+                    b"outline_width\0".as_ptr() as *const i8,
+                ),
+                uniform_outline_color: gl::GetUniformLocation(
+                    prog,
+                    b"outline_color\0".as_ptr() as *const i8,
+                ),
+                uniform_outline_pass: gl::GetUniformLocation(
+                    prog,
+                    b"outline_pass\0".as_ptr() as *const i8,
+                ),
+                uniform_outline_glow: gl::GetUniformLocation(
+                    prog,
+                    b"outline_glow\0".as_ptr() as *const i8,
+                ),
                 uniform_part_id: gl::GetUniformLocation(prog, b"part_id\0".as_ptr() as *const i8),
-                uniform_part_pass: gl::GetUniformLocation(prog, b"part_pass\0".as_ptr() as *const i8),
+                uniform_part_pass: gl::GetUniformLocation(
+                    prog,
+                    b"part_pass\0".as_ptr() as *const i8,
+                ),
                 parts_enabled: utils::env_flag("COLONQ_PARTS", false),
                 outline_width: utils::env_parse::<f32>("COLONQ_OUTLINE").unwrap_or(0.004),
-                uniform_joint_matrices: gl::GetUniformLocation(prog, b"joint_matrices\0".as_ptr() as *const i8),
+                uniform_joint_matrices: gl::GetUniformLocation(
+                    prog,
+                    b"joint_matrices\0".as_ptr() as *const i8,
+                ),
                 max_joints,
                 clip_y,
                 uniform_clip_y: gl::GetUniformLocation(prog, b"clip_y\0".as_ptr() as *const i8),

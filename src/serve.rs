@@ -24,7 +24,13 @@ pub struct FrameStore {
 impl FrameStore {
     pub fn new(bg: (u8, u8, u8)) -> Self {
         Self {
-            state: Mutex::new(Frame { cells: Vec::new(), w: 0, h: 0, seq: 0, json: String::new() }),
+            state: Mutex::new(Frame {
+                cells: Vec::new(),
+                w: 0,
+                h: 0,
+                seq: 0,
+                json: String::new(),
+            }),
             changed: Condvar::new(),
             bg,
         }
@@ -37,7 +43,13 @@ impl FrameStore {
         let mut state = self.state.lock().unwrap();
         let seq = state.seq.wrapping_add(1);
         let json = encode_frame(seq, w, h, self.bg, &cells);
-        *state = Frame { cells, w, h, seq, json };
+        *state = Frame {
+            cells,
+            w,
+            h,
+            seq,
+            json,
+        };
         self.changed.notify_all();
     }
 }
@@ -53,23 +65,31 @@ fn encode_frame(seq: u64, w: usize, h: usize, bg: (u8, u8, u8), cells: &Cells) -
     let mut entries = String::with_capacity(cells.iter().map(|row| row.len()).sum::<usize>() * 12);
     for (y, row) in cells.iter().enumerate() {
         for (x, &(glyph, rgb)) in row.iter().enumerate() {
-            if glyph == ' ' { continue; }
+            if glyph == ' ' {
+                continue;
+            }
             let color = *indices.entry(rgb).or_insert_with(|| {
                 let index = palette.len();
                 palette.push(rgb);
                 index
             });
-            if !entries.is_empty() { entries.push(','); }
+            if !entries.is_empty() {
+                entries.push(',');
+            }
             let _ = write!(entries, "[{},{},{}]", y * w + x, glyph as u32, color);
         }
     }
     let mut palette_json = String::with_capacity(palette.len() * 13);
     for (i, &(r, g, b)) in palette.iter().enumerate() {
-        if i > 0 { palette_json.push(','); }
+        if i > 0 {
+            palette_json.push(',');
+        }
         let _ = write!(palette_json, "[{},{},{}]", r, g, b);
     }
-    let produced_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default().as_millis();
+    let produced_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
     let mut out = String::with_capacity(entries.len() + palette_json.len() + 96);
     let _ = write!(out, "{{\"seq\":{},\"w\":{},\"h\":{},\"producedAt\":{},\"bg\":[{},{},{}],\"palette\":[{}],\"cells\":[{}]}}",
             seq, w, h, produced_at, bg.0, bg.1, bg.2, palette_json, entries);
@@ -78,9 +98,13 @@ fn encode_frame(seq: u64, w: usize, h: usize, bg: (u8, u8, u8), cells: &Cells) -
 
 fn escape(ch: char) -> String {
     match ch {
-        '&' => "&amp;".into(), '<' => "&lt;".into(), '>' => "&gt;".into(),
-        '"' => "&quot;".into(), '\'' => "&#39;".into(),
-        c if c.is_control() => " ".into(), c => c.to_string(),
+        '&' => "&amp;".into(),
+        '<' => "&lt;".into(),
+        '>' => "&gt;".into(),
+        '"' => "&quot;".into(),
+        '\'' => "&#39;".into(),
+        c if c.is_control() => " ".into(),
+        c => c.to_string(),
     }
 }
 
@@ -92,13 +116,20 @@ fn render_html(store: &FrameStore) -> String {
         let mut previous = None;
         for &(ch, rgb) in row {
             if previous != Some(rgb) {
-                if previous.is_some() { out.push_str("</span>"); }
-                out.push_str(&format!("<span style=\"color:#{:02x}{:02x}{:02x}\">", rgb.0, rgb.1, rgb.2));
+                if previous.is_some() {
+                    out.push_str("</span>");
+                }
+                out.push_str(&format!(
+                    "<span style=\"color:#{:02x}{:02x}{:02x}\">",
+                    rgb.0, rgb.1, rgb.2
+                ));
                 previous = Some(rgb);
             }
             out.push_str(&escape(ch));
         }
-        if previous.is_some() { out.push_str("</span>"); }
+        if previous.is_some() {
+            out.push_str("</span>");
+        }
         out.push('\n');
     }
     out
@@ -124,7 +155,10 @@ fn handle_sse(mut stream: TcpStream, store: &FrameStore) -> std::io::Result<()> 
     loop {
         let mut state = store.state.lock().unwrap();
         if state.seq == last {
-            let (next, timeout) = store.changed.wait_timeout(state, Duration::from_secs(5)).unwrap();
+            let (next, timeout) = store
+                .changed
+                .wait_timeout(state, Duration::from_secs(5))
+                .unwrap();
             state = next;
             if timeout.timed_out() && state.seq == last {
                 drop(state);
@@ -132,7 +166,9 @@ fn handle_sse(mut stream: TcpStream, store: &FrameStore) -> std::io::Result<()> 
                 continue;
             }
         }
-        if state.seq == last { continue; }
+        if state.seq == last {
+            continue;
+        }
         last = state.seq;
         let body = state.json.clone();
         drop(state); // Never hold the frame mutex during socket writes.
@@ -148,21 +184,43 @@ fn handle(mut stream: TcpStream, store: Arc<FrameStore>) -> std::io::Result<()> 
     let mut buf = [0; 1024];
     while !request.windows(4).any(|w| w == b"\r\n\r\n") {
         let n = stream.read(&mut buf)?;
-        if n == 0 { return Ok(()); }
+        if n == 0 {
+            return Ok(());
+        }
         request.extend_from_slice(&buf[..n]);
         if request.len() > 8192 {
-            return respond(&mut stream, "431 Request Header Fields Too Large", "text/plain", "header too large");
+            return respond(
+                &mut stream,
+                "431 Request Header Fields Too Large",
+                "text/plain",
+                "header too large",
+            );
         }
     }
     let request = String::from_utf8_lossy(&request);
     let mut tokens = request.split_whitespace();
     if tokens.next() != Some("GET") {
-        return respond(&mut stream, "405 Method Not Allowed", "text/plain", "GET only");
+        return respond(
+            &mut stream,
+            "405 Method Not Allowed",
+            "text/plain",
+            "GET only",
+        );
     }
-    let path = tokens.next().unwrap_or("/").split('?').next().unwrap_or("/");
+    let path = tokens
+        .next()
+        .unwrap_or("/")
+        .split('?')
+        .next()
+        .unwrap_or("/");
     match path {
         "/stream" => handle_sse(stream, &store),
-        "/frame" => respond(&mut stream, "200 OK", "text/html; charset=utf-8", &render_html(&store)),
+        "/frame" => respond(
+            &mut stream,
+            "200 OK",
+            "text/html; charset=utf-8",
+            &render_html(&store),
+        ),
         "/snapshot" => {
             let state = store.state.lock().unwrap();
             let json = state.json.clone();
@@ -175,7 +233,12 @@ fn handle(mut stream: TcpStream, store: Arc<FrameStore>) -> std::io::Result<()> 
             drop(state);
             respond(&mut stream, "200 OK", "text/plain", &size)
         }
-        "/viewer.js" => respond(&mut stream, "200 OK", "text/javascript; charset=utf-8", include_str!("viewer.js")),
+        "/viewer.js" => respond(
+            &mut stream,
+            "200 OK",
+            "text/javascript; charset=utf-8",
+            include_str!("viewer.js"),
+        ),
         "/" => respond(&mut stream, "200 OK", "text/html; charset=utf-8", page()),
         _ => respond(&mut stream, "404 Not Found", "text/plain", "not found"),
     }
@@ -184,15 +247,23 @@ fn handle(mut stream: TcpStream, store: Arc<FrameStore>) -> std::io::Result<()> 
 pub fn run(port: u16, store: Arc<FrameStore>) {
     let listener = match TcpListener::bind(("127.0.0.1", port)) {
         Ok(l) => l,
-        Err(e) => { log::error!("推流服务启动失败（127.0.0.1:{}）：{}", port, e); return; }
+        Err(e) => {
+            log::error!("推流服务启动失败（127.0.0.1:{}）：{}", port, e);
+            return;
+        }
     };
-    log::info!("ASCII 推流: http://127.0.0.1:{} （OBS 浏览器源；默认 385×350 小画面）", port);
+    log::info!(
+        "ASCII 推流: http://127.0.0.1:{} （OBS 浏览器源；默认 385×350 小画面）",
+        port
+    );
     for connection in listener.incoming() {
         match connection {
             Ok(stream) => {
                 let store = store.clone();
                 std::thread::spawn(move || {
-                    if let Err(e) = handle(stream, store) { log::debug!("推流客户端断开: {}", e); }
+                    if let Err(e) = handle(stream, store) {
+                        log::debug!("推流客户端断开: {}", e);
+                    }
                 });
             }
             Err(e) => log::warn!("推流接收连接失败: {}", e),
@@ -205,7 +276,13 @@ mod tests {
     use super::*;
     #[test]
     fn rgb_is_not_quantized_or_overflowed() {
-        let json = encode_frame(1, 2, 1, (0,0,0), &vec![vec![(' ',(0,0,0)),('@',(255,254,128))]]);
+        let json = encode_frame(
+            1,
+            2,
+            1,
+            (0, 0, 0),
+            &vec![vec![(' ', (0, 0, 0)), ('@', (255, 254, 128))]],
+        );
         assert!(json.contains("\"palette\":[[255,254,128]]"));
         assert!(json.contains("\"cells\":[[1,64,0]]"));
     }
@@ -213,10 +290,10 @@ mod tests {
     fn encode_frame_emits_bg_palette_and_cells_in_order() {
         // 覆盖 encode_frame 改写后的输出结构：背景、调色板去重顺序、空格跳过但不位移
         let cells = vec![
-            vec![('a',(10,20,30)), (' ',(0,0,0)), ('b',(40,50,60))],
-            vec![('c',(10,20,30)), ('d',(70,80,90)), (' ',(0,0,0))],
+            vec![('a', (10, 20, 30)), (' ', (0, 0, 0)), ('b', (40, 50, 60))],
+            vec![('c', (10, 20, 30)), ('d', (70, 80, 90)), (' ', (0, 0, 0))],
         ];
-        let json = encode_frame(7, 3, 2, (1,2,3), &cells);
+        let json = encode_frame(7, 3, 2, (1, 2, 3), &cells);
         assert!(json.starts_with("{\"seq\":7,\"w\":3,\"h\":2,\"producedAt\":"));
         assert!(json.contains("\"bg\":[1,2,3]"));
         assert!(json.contains("\"palette\":[[10,20,30],[40,50,60],[70,80,90]]"));
@@ -225,25 +302,30 @@ mod tests {
 
     #[test]
     fn numeric_glyphs_are_json_safe() {
-        let cells = vec![vec![('"',(1,2,3)),('\\',(1,2,3)),('😺',(1,2,3))]];
-        let json = encode_frame(1, 3, 1, (0,0,0), &cells);
+        let cells = vec![vec![('"', (1, 2, 3)), ('\\', (1, 2, 3)), ('😺', (1, 2, 3))]];
+        let json = encode_frame(1, 3, 1, (0, 0, 0), &cells);
         assert!(json.contains("[0,34,0],[1,92,0],[2,128570,0]"));
     }
     #[test]
     fn html_preserves_leading_spaces_and_escapes_content() {
-        let store = FrameStore::new((0,0,0));
-        store.set_frame(vec![vec![(' ',(0,0,0)),(' ',(0,0,0)),('<',(255,254,128)),('&',(255,254,128))]]);
+        let store = FrameStore::new((0, 0, 0));
+        store.set_frame(vec![vec![
+            (' ', (0, 0, 0)),
+            (' ', (0, 0, 0)),
+            ('<', (255, 254, 128)),
+            ('&', (255, 254, 128)),
+        ]]);
         let html = render_html(&store);
         assert!(html.starts_with("<span style=\"color:#000000\">  </span>"));
         assert!(html.contains("&lt;&amp;"));
     }
     #[test]
     fn frame_dimensions_and_sequence_update_together() {
-        let store = FrameStore::new((0,0,0));
-        store.set_frame(vec![vec![('@',(1,2,3)); 128]; 64]);
-        store.set_frame(vec![vec![('@',(1,2,3)); 40]; 20]);
-        let state=store.state.lock().unwrap();
-        assert_eq!((state.w,state.h,state.seq), (40,20,2));
+        let store = FrameStore::new((0, 0, 0));
+        store.set_frame(vec![vec![('@', (1, 2, 3)); 128]; 64]);
+        store.set_frame(vec![vec![('@', (1, 2, 3)); 40]; 20]);
+        let state = store.state.lock().unwrap();
+        assert_eq!((state.w, state.h, state.seq), (40, 20, 2));
         assert!(state.json.contains("\"w\":40,\"h\":20"));
     }
 }

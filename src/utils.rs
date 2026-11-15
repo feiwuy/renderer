@@ -56,8 +56,12 @@ pub fn env_parse<T: std::str::FromStr>(name: &str) -> Option<T> {
     match trimmed.parse::<T>() {
         Ok(v) => Some(v),
         Err(_) => {
-            log::warn!("环境变量 {} 的值 {:?} 无法解析为 {}，已忽略（使用默认值）",
-                       name, raw, std::any::type_name::<T>());
+            log::warn!(
+                "环境变量 {} 的值 {:?} 无法解析为 {}，已忽略（使用默认值）",
+                name,
+                raw,
+                std::any::type_name::<T>()
+            );
             None
         }
     }
@@ -70,8 +74,11 @@ pub fn env_csv3(name: &str) -> Option<(f32, f32, f32)> {
     match parse_csv3(&raw) {
         Some(v) => Some(v),
         None => {
-            log::warn!("环境变量 {} 的值 {:?} 不是 3 个逗号分隔的数字，已忽略（使用默认值）",
-                       name, raw);
+            log::warn!(
+                "环境变量 {} 的值 {:?} 不是 3 个逗号分隔的数字，已忽略（使用默认值）",
+                name,
+                raw
+            );
             None
         }
     }

@@ -1,8 +1,8 @@
-use crate::{gl, utils, framebuffer};
+use crate::{framebuffer, gl, utils};
 
-use std::{collections::HashMap, env, cell::RefCell};
+use std::{cell::RefCell, collections::HashMap, env};
 
-use colors_transform::{Rgb, Color};
+use colors_transform::{Color, Rgb};
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum PaletteType {
@@ -58,7 +58,10 @@ impl<'a> VideoPlayer<'a> {
     pub fn new(ctx: &Context) -> Option<Self> {
         let mpv = match libmpv::Mpv::new() {
             Ok(m) => Box::leak(Box::new(m)),
-            Err(e) => { log::warn!("libmpv 初始化失败：{}，视频填充不可用", e); return None; }
+            Err(e) => {
+                log::warn!("libmpv 初始化失败：{}，视频填充不可用", e);
+                return None;
+            }
         };
         // 这些属性失败不影响主功能，失败就跳过
         for (k, v) in [("mute", "yes"), ("keepaspect", "no"), ("loop", "inf")] {
@@ -67,7 +70,10 @@ impl<'a> VideoPlayer<'a> {
             }
         }
         let _ = mpv.set_property("video-timing-offset", 0);
-        let _ = mpv.set_property("ytdl-format", "bestvideo[height=?144][fps<=?30][vcodec!=?vp9]+bestaudio/best");
+        let _ = mpv.set_property(
+            "ytdl-format",
+            "bestvideo[height=?144][fps<=?30][vcodec!=?vp9]+bestaudio/best",
+        );
         let mpv_render_context = libmpv::render::RenderContext::new(
             unsafe { mpv.ctx.as_mut() },
             vec![
@@ -81,7 +87,10 @@ impl<'a> VideoPlayer<'a> {
         let mpv_render_context = match mpv_render_context {
             Ok(r) => r,
             Err(e) => {
-                log::warn!("mpv GL 渲染上下文创建失败：{}（显卡驱动/PRIME 下常见），视频填充不可用", e);
+                log::warn!(
+                    "mpv GL 渲染上下文创建失败：{}（显卡驱动/PRIME 下常见），视频填充不可用",
+                    e
+                );
                 return None;
             }
         };
@@ -99,7 +108,12 @@ impl<'a> VideoPlayer<'a> {
     pub fn update(&mut self, ctx: &Context) {
         self.fb.bind(&ctx);
         self.mpv_render_context
-            .render::<i32>(self.fb.fbo as _, self.fb.dims.w as _, self.fb.dims.h as _, true)
+            .render::<i32>(
+                self.fb.fbo as _,
+                self.fb.dims.w as _,
+                self.fb.dims.h as _,
+                true,
+            )
             .unwrap();
         // log::info!(
         //     "hair: {:?} {:?}",
@@ -110,19 +124,25 @@ impl<'a> VideoPlayer<'a> {
     }
 
     pub fn get_pixel(&self, x: i32, y: i32) -> (u8, u8, u8) {
-        let offsetx = (114 - 64)/2;
+        let offsetx = (114 - 64) / 2;
         // let offsetx = 0;
         let invx = (self.fb.dims.h as i32) - (x + 1);
         let idx = ((self.fb.dims.w as i32) * invx * 4 + (offsetx + y) * 4) as usize;
         let r = if let Some(r) = self.fb.pixels.get(idx) {
             *r
-        } else { 0 };
+        } else {
+            0
+        };
         let g = if let Some(g) = self.fb.pixels.get(idx + 1) {
             *g
-        } else { 0 };
+        } else {
+            0
+        };
         let b = if let Some(b) = self.fb.pixels.get(idx + 2) {
             *b
-        } else { 0 };
+        } else {
+            0
+        };
         (r, g, b)
     }
 }
@@ -140,16 +160,16 @@ pub struct Context {
     pub attrib_expressions: HashMap<String, gl::types::GLuint>,
 }
 
-pub fn get_proc_address(
-    video: &&sdl2::VideoSubsystem, name: &str,
-) -> *mut std::ffi::c_void {
+pub fn get_proc_address(video: &&sdl2::VideoSubsystem, name: &str) -> *mut std::ffi::c_void {
     video.gl_get_proc_address(name) as *mut std::ffi::c_void
 }
 
 impl Context {
     pub fn new() -> Self {
         let sdl2 = sdl2::init().expect("SDL 初始化失败");
-        let video = sdl2.video().expect("SDL video 子系统初始化失败（没有可用显示？）");
+        let video = sdl2
+            .video()
+            .expect("SDL video 子系统初始化失败（没有可用显示？）");
         // sdl2.mouse().set_relative_mouse_mode(true);
         // sdl2::hint::set("SDL_HINT_MOUSE_RELATIVE_MODE_WARP", "1");
 
@@ -159,26 +179,40 @@ impl Context {
 
         // A stream does not need a presented SDL surface. Hidden/off-screen windows can
         // block swap on Wayland; never use their frame callbacks to clock the renderer.
-        let serving = std::env::var("COLONQ_SERVE").ok()
-            .and_then(|v| v.trim().parse::<u16>().ok()).is_some();
+        let serving = std::env::var("COLONQ_SERVE")
+            .ok()
+            .and_then(|v| v.trim().parse::<u16>().ok())
+            .is_some();
         // 推流模式默认隐藏预览窗口；COLONQ_PREVIEW=1/0 可显式覆盖
         let preview_enabled = utils::env_flag("COLONQ_PREVIEW", !serving);
         let mut builder = video.window("colonq", 640, 360);
         builder.opengl();
-        if !preview_enabled { builder.hidden(); }
+        if !preview_enabled {
+            builder.hidden();
+        }
         let window = builder.build().expect("创建 SDL GL 窗口失败");
-        let gl_context = window.gl_create_context()
+        let gl_context = window
+            .gl_create_context()
             .expect("创建 OpenGL 上下文失败（显卡驱动/PRIME/会话环境问题）");
 
         // This must happen AFTER the GL context is current. Previously this call was
         // made before context creation and its failure was silently ignored.
         let vsync = utils::env_flag("COLONQ_VSYNC", false);
         if let Err(e) = video.gl_set_swap_interval(if vsync { 1 } else { 0 }) {
-            log::warn!("设置 GL swap interval 失败: {}；推流无预览模式不调用 swap", e);
+            log::warn!(
+                "设置 GL swap interval 失败: {}；推流无预览模式不调用 swap",
+                e
+            );
         }
-        log::info!("SDL 预览: {}；窗口交换: {}",
+        log::info!(
+            "SDL 预览: {}；窗口交换: {}",
             if preview_enabled { "显示" } else { "隐藏" },
-            if preview_enabled { "开启" } else { "禁用（推流不依赖窗口可见性）" });
+            if preview_enabled {
+                "开启"
+            } else {
+                "禁用（推流不依赖窗口可见性）"
+            }
+        );
         gl::load_with(|s| video.gl_get_proc_address(s) as *const std::ffi::c_void);
 
         // 直接问驱动实际用的是哪个渲染器（llvmpipe = 软件渲染，说明没走显卡）
@@ -186,12 +220,18 @@ impl Context {
             use std::ffi::CStr;
             let get = |e: gl::types::GLenum| {
                 let p = gl::GetString(e);
-                if p.is_null() { return "?".to_string() }
-                CStr::from_ptr(p as *const i8).to_string_lossy().into_owned()
+                if p.is_null() {
+                    return "?".to_string();
+                }
+                CStr::from_ptr(p as *const i8)
+                    .to_string_lossy()
+                    .into_owned()
             };
             log::info!(
                 "GL 后端: vendor={} | renderer={} | version={}",
-                get(gl::VENDOR), get(gl::RENDERER), get(gl::VERSION)
+                get(gl::VENDOR),
+                get(gl::RENDERER),
+                get(gl::VERSION)
             );
         }
 
@@ -226,16 +266,21 @@ impl Context {
                         }
                     }
                 }
-            },
+            }
             Err(_) => {
                 Rgb::from(0x00 as _, 0x00 as _, 0x00 as _) // 默认纯黑（原作者是 0x15050f 深紫）
-            },
+            }
         };
 
         unsafe {
             // set unchanging options
             gl::Viewport(0, 0, winw as _, winh as _);
-            gl::ClearColor(rgb.get_red() / 255.0, rgb.get_green() / 255.0, rgb.get_blue() / 255.0, 1.0);
+            gl::ClearColor(
+                rgb.get_red() / 255.0,
+                rgb.get_green() / 255.0,
+                rgb.get_blue() / 255.0,
+                1.0,
+            );
             gl::ClearDepth(1.0);
             gl::Enable(gl::DEPTH_TEST);
             gl::DepthFunc(gl::LEQUAL);
@@ -253,7 +298,11 @@ impl Context {
             preview_enabled,
             clearcolor: rgb,
 
-            bgcolor: (rgb.get_red() as _, rgb.get_green() as _, rgb.get_blue() as _),
+            bgcolor: (
+                rgb.get_red() as _,
+                rgb.get_green() as _,
+                rgb.get_blue() as _,
+            ),
             dims: utils::Dimensions {
                 w: winw as _,
                 h: winh as _,

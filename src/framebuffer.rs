@@ -1,8 +1,8 @@
+use colored::Colorize;
 use std::io::Write;
 use termion::raw::IntoRawMode;
-use colored::Colorize;
 
-use crate::{context, utils, gl, avatar, term};
+use crate::{avatar, context, gl, term, utils};
 
 /// 左边缘竖线图案（邻格掩码，位序见 `Framebuffer::get_surrounding`）：
 /// `0b11010110` = 左列三格 + 上 + 下（"[" 形）；`0b11010111` 是它多一个右下邻格时的变体。
@@ -40,7 +40,12 @@ impl Framebuffer {
     /// 异步回读连续这么多帧读不到结果就退回同步路径（24fps 下约 2.5 秒）
     const PBO_READY_LIMIT: u32 = 60;
 
-    pub fn new(_ctx: &context::Context, depth: bool, dims: (i32, i32), offsets: (i32, i32)) -> Self {
+    pub fn new(
+        _ctx: &context::Context,
+        depth: bool,
+        dims: (i32, i32),
+        offsets: (i32, i32),
+    ) -> Self {
         let (w, h) = dims;
         let mut tex: gl::types::GLuint = 0;
         let mut fbo: gl::types::GLuint = 0;
@@ -55,7 +60,12 @@ impl Framebuffer {
                 gl::GenRenderbuffers(1, &mut depth_buffer);
                 gl::BindRenderbuffer(gl::RENDERBUFFER, depth_buffer);
                 gl::RenderbufferStorage(gl::RENDERBUFFER, gl::DEPTH_COMPONENT32F, w, h);
-                gl::FramebufferRenderbuffer(gl::FRAMEBUFFER, gl::DEPTH_ATTACHMENT, gl::RENDERBUFFER, depth_buffer);
+                gl::FramebufferRenderbuffer(
+                    gl::FRAMEBUFFER,
+                    gl::DEPTH_ATTACHMENT,
+                    gl::RENDERBUFFER,
+                    depth_buffer,
+                );
             }
 
             // generate and attach texture
@@ -76,7 +86,13 @@ impl Framebuffer {
             gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as i32);
             gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
             gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
-            gl::FramebufferTexture2D(gl::FRAMEBUFFER, gl::COLOR_ATTACHMENT0, gl::TEXTURE_2D, tex, 0);
+            gl::FramebufferTexture2D(
+                gl::FRAMEBUFFER,
+                gl::COLOR_ATTACHMENT0,
+                gl::TEXTURE_2D,
+                tex,
+                0,
+            );
             gl::DrawBuffer(gl::COLOR_ATTACHMENT0);
 
             let status = gl::CheckFramebufferStatus(gl::FRAMEBUFFER);
@@ -92,16 +108,26 @@ impl Framebuffer {
         // 需要真 GPU 才看得出收益，且驱动兼容性不确定。想试就设 COLONQ_PBO=1，
         // 若连续若干帧等不到结果会自动退回同步回读，不会卡在黑屏。
         let pbo_enabled = utils::env_flag("COLONQ_PBO", false);
-        log::info!("像素回读方式: {}（COLONQ_PBO=1 可开启异步双 PBO）",
-                   if pbo_enabled { "异步双 PBO" } else { "同步 glGetTextureImage" });
+        log::info!(
+            "像素回读方式: {}（COLONQ_PBO=1 可开启异步双 PBO）",
+            if pbo_enabled {
+                "异步双 PBO"
+            } else {
+                "同步 glGetTextureImage"
+            }
+        );
         let mut pbo: [gl::types::GLuint; 2] = [0, 0];
         if pbo_enabled {
             unsafe {
                 gl::GenBuffers(2, pbo.as_mut_ptr());
                 for &handle in pbo.iter() {
                     gl::BindBuffer(gl::PIXEL_PACK_BUFFER, handle);
-                    gl::BufferData(gl::PIXEL_PACK_BUFFER, pixels_len as _,
-                                   std::ptr::null(), gl::STREAM_READ);
+                    gl::BufferData(
+                        gl::PIXEL_PACK_BUFFER,
+                        pixels_len as _,
+                        std::ptr::null(),
+                        gl::STREAM_READ,
+                    );
                 }
                 gl::BindBuffer(gl::PIXEL_PACK_BUFFER, 0);
             }
@@ -109,7 +135,10 @@ impl Framebuffer {
         Self {
             tex,
             fbo,
-            dims: utils::Dimensions { w: w as _, h: h as _ },
+            dims: utils::Dimensions {
+                w: w as _,
+                h: h as _,
+            },
             offsets,
             pixels,
             pixels_len,
@@ -143,7 +172,9 @@ impl Framebuffer {
 
     /// 网格尺寸变化时重建 FBO（旧的 GL 对象直接丢弃，resize 不常发生）
     pub fn resize(&mut self, ctx: &context::Context, w: i32, h: i32) {
-        if self.dims.w == w as f32 && self.dims.h == h as f32 { return }
+        if self.dims.w == w as f32 && self.dims.h == h as f32 {
+            return;
+        }
         let nf = Framebuffer::new(ctx, true, (w, h), self.offsets);
         self.fbo = nf.fbo;
         self.tex = nf.tex;
@@ -162,9 +193,13 @@ impl Framebuffer {
         let (offsetx, offsety) = self.offsets;
         unsafe {
             gl::BindFramebuffer(gl::FRAMEBUFFER, self.fbo);
-            gl::Viewport(offsetx as _, offsety as _, self.dims.w as _, self.dims.h as _);
+            gl::Viewport(
+                offsetx as _,
+                offsety as _,
+                self.dims.w as _,
+                self.dims.h as _,
+            );
             // gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
-
         }
     }
 
@@ -183,7 +218,9 @@ impl Framebuffer {
         } else {
             let invx = h - (x + 1);
             let base_idx = ((invx * w + y) * 4) as usize;
-            if base_idx > (w * h * 4) as usize { return None; }
+            if base_idx > (w * h * 4) as usize {
+                return None;
+            }
             let r = *self.pixels.get(base_idx)?;
             let g = *self.pixels.get(base_idx + 1)?;
             let b = *self.pixels.get(base_idx + 2)?;
@@ -198,21 +235,44 @@ impl Framebuffer {
 
     pub fn get_surrounding(&self, bg: (i32, i32, i32), x: i32, y: i32) -> u8 {
         let mut ret = 0;
-        if let Some(_) = self.get_pixel(bg, x - 1, y - 1) { ret = ret | 0b10000000 }
-        if let Some(_) = self.get_pixel(bg, x - 1, y + 0) { ret = ret | 0b01000000 }
-        if let Some(_) = self.get_pixel(bg, x - 1, y + 1) { ret = ret | 0b00100000 }
-        if let Some(_) = self.get_pixel(bg, x + 0, y - 1) { ret = ret | 0b00010000 }
-        if let Some(_) = self.get_pixel(bg, x + 0, y + 1) { ret = ret | 0b00001000 }
-        if let Some(_) = self.get_pixel(bg, x + 1, y - 1) { ret = ret | 0b00000100 }
-        if let Some(_) = self.get_pixel(bg, x + 1, y + 0) { ret = ret | 0b00000010 }
-        if let Some(_) = self.get_pixel(bg, x + 1, y + 1) { ret = ret | 0b00000001 }
+        if let Some(_) = self.get_pixel(bg, x - 1, y - 1) {
+            ret = ret | 0b10000000
+        }
+        if let Some(_) = self.get_pixel(bg, x - 1, y + 0) {
+            ret = ret | 0b01000000
+        }
+        if let Some(_) = self.get_pixel(bg, x - 1, y + 1) {
+            ret = ret | 0b00100000
+        }
+        if let Some(_) = self.get_pixel(bg, x + 0, y - 1) {
+            ret = ret | 0b00010000
+        }
+        if let Some(_) = self.get_pixel(bg, x + 0, y + 1) {
+            ret = ret | 0b00001000
+        }
+        if let Some(_) = self.get_pixel(bg, x + 1, y - 1) {
+            ret = ret | 0b00000100
+        }
+        if let Some(_) = self.get_pixel(bg, x + 1, y + 0) {
+            ret = ret | 0b00000010
+        }
+        if let Some(_) = self.get_pixel(bg, x + 1, y + 1) {
+            ret = ret | 0b00000001
+        }
         ret
     }
 
     /// 同步回读（COLONQ_PBO=0 时使用，行为和旧版一致：等 GPU 画完再拷）
     pub fn populate_pixels(&mut self) {
         unsafe {
-            gl::GetTextureImage(self.tex, 0, gl::RGBA, gl::UNSIGNED_BYTE, self.pixels_len as _, self.pixels.as_mut_ptr() as _);
+            gl::GetTextureImage(
+                self.tex,
+                0,
+                gl::RGBA,
+                gl::UNSIGNED_BYTE,
+                self.pixels_len as _,
+                self.pixels.as_mut_ptr() as _,
+            );
         }
     }
 
@@ -228,8 +288,14 @@ impl Framebuffer {
         unsafe {
             gl::BindBuffer(gl::PIXEL_PACK_BUFFER, self.pbo[w]);
             // 末参数为 NULL 表示"拷进当前绑定的 PBO"
-            gl::GetTextureImage(self.tex, 0, gl::RGBA, gl::UNSIGNED_BYTE,
-                                self.pixels_len as _, std::ptr::null_mut());
+            gl::GetTextureImage(
+                self.tex,
+                0,
+                gl::RGBA,
+                gl::UNSIGNED_BYTE,
+                self.pixels_len as _,
+                std::ptr::null_mut(),
+            );
             gl::BindBuffer(gl::PIXEL_PACK_BUFFER, 0);
             if !self.pbo_fence[w].is_null() {
                 gl::DeleteSync(self.pbo_fence[w]);
@@ -269,11 +335,18 @@ impl Framebuffer {
                 }
             }
             gl::BindBuffer(gl::PIXEL_PACK_BUFFER, self.pbo[r]);
-            let ptr = gl::MapBufferRange(gl::PIXEL_PACK_BUFFER, 0, self.pixels_len as _,
-                                         gl::MAP_READ_BIT);
+            let ptr = gl::MapBufferRange(
+                gl::PIXEL_PACK_BUFFER,
+                0,
+                self.pixels_len as _,
+                gl::MAP_READ_BIT,
+            );
             if !ptr.is_null() {
-                std::ptr::copy_nonoverlapping(ptr as *const u8, self.pixels.as_mut_ptr(),
-                                              self.pixels_len);
+                std::ptr::copy_nonoverlapping(
+                    ptr as *const u8,
+                    self.pixels.as_mut_ptr(),
+                    self.pixels_len,
+                );
                 gl::UnmapBuffer(gl::PIXEL_PACK_BUFFER);
                 self.pbo_skips = 0;
             }
@@ -281,12 +354,23 @@ impl Framebuffer {
         }
     }
 
-    pub fn render_term(&self, ctx: &context::Context, framecount: i32, players: &avatar::PalettePlayers, palette: &avatar::Palette, t: &mut term::Term, c: usize) {
+    pub fn render_term(
+        &self,
+        ctx: &context::Context,
+        framecount: i32,
+        players: &avatar::PalettePlayers,
+        palette: &avatar::Palette,
+        t: &mut term::Term,
+        c: usize,
+    ) {
         t.count = c;
         let mut idx = 0;
-        let mut emoji_cache: std::collections::HashMap<char, bool> = std::collections::HashMap::new();
-        for x in 0..(self.dims.h as _) {   // x = 行
-            for y in 0..(self.dims.w as _) {   // y = 列
+        let mut emoji_cache: std::collections::HashMap<char, bool> =
+            std::collections::HashMap::new();
+        for x in 0..(self.dims.h as _) {
+            // x = 行
+            for y in 0..(self.dims.w as _) {
+                // y = 列
                 match self.get_pixel_rgba(ctx.bgcolor, x, y) {
                     Some((cr, cg, cb, ca)) => {
                         let col = (cr, cg, cb);
@@ -299,26 +383,44 @@ impl Framebuffer {
                         }
                         let (r, g, b) = match pal {
                             avatar::PaletteEntry::Color(c) => c,
-                            avatar::PaletteEntry::Pattern { width, height, pixels } =>
-                                if let Some(pcol) = pixels.get(((x % height) * width + (y % width)) as usize) {
-                                    *pcol
-                                } else {
-                                    col
-                                },
-                            avatar::PaletteEntry::Animation { delay, width, height, frames } => {
-                                let pixels: &Vec<(u8, u8, u8)> = frames.get(((framecount / delay.max(1)) % frames.len() as i32) as usize).unwrap();
-                                if let Some(pcol) = pixels.get(((x % height) * width + (y % width)) as usize) {
+                            avatar::PaletteEntry::Pattern {
+                                width,
+                                height,
+                                pixels,
+                            } => {
+                                if let Some(pcol) =
+                                    pixels.get(((x % height) * width + (y % width)) as usize)
+                                {
                                     *pcol
                                 } else {
                                     col
                                 }
-                            },
-                            avatar::PaletteEntry::Video => {
-                                context::PaletteType::from_color(col)
-                                    .as_ref().and_then(|pty| players.players.get(pty))
-                                    .and_then(|player| Some(player.get_pixel(x, y)))
-                                    .unwrap_or(col)
-                            },
+                            }
+                            avatar::PaletteEntry::Animation {
+                                delay,
+                                width,
+                                height,
+                                frames,
+                            } => {
+                                let pixels: &Vec<(u8, u8, u8)> = frames
+                                    .get(
+                                        ((framecount / delay.max(1)) % frames.len() as i32)
+                                            as usize,
+                                    )
+                                    .unwrap();
+                                if let Some(pcol) =
+                                    pixels.get(((x % height) * width + (y % width)) as usize)
+                                {
+                                    *pcol
+                                } else {
+                                    col
+                                }
+                            }
+                            avatar::PaletteEntry::Video => context::PaletteType::from_color(col)
+                                .as_ref()
+                                .and_then(|pty| players.players.get(pty))
+                                .and_then(|player| Some(player.get_pixel(x, y)))
+                                .unwrap_or(col),
                         };
 
                         let wordlen = wordref.chars().count();
@@ -333,51 +435,84 @@ impl Framebuffer {
 
                         let s = self.get_surrounding(ctx.bgcolor, x, y);
                         if s == 0b01101011 || s == 0b01101111 {
-                            c1 = '|'; is_emoji = false;
+                            c1 = '|';
+                            is_emoji = false;
                         } else if is_left_edge_bar(s) {
-                            if is_emoji { c1 = '.'; }
-                            c2 = '|'; is_emoji = false;
-                        } else if s == 0b00101011 || s == 0b00101111 || s == 0b00101110 || s == 0b00101100 || s == 0b00001011 {
-                            c1 = ' '; c2 = '/'; is_emoji = false;
-                        } else if s == 0b10010110 || s == 0b10010111 || s == 0b10010011 || s == 0b10010001 || s == 0b00010110 {
-                            c1 = '\\'; c2 = ' '; is_emoji = false;
+                            if is_emoji {
+                                c1 = '.';
+                            }
+                            c2 = '|';
+                            is_emoji = false;
+                        } else if s == 0b00101011
+                            || s == 0b00101111
+                            || s == 0b00101110
+                            || s == 0b00101100
+                            || s == 0b00001011
+                        {
+                            c1 = ' ';
+                            c2 = '/';
+                            is_emoji = false;
+                        } else if s == 0b10010110
+                            || s == 0b10010111
+                            || s == 0b10010011
+                            || s == 0b10010001
+                            || s == 0b00010110
+                        {
+                            c1 = '\\';
+                            c2 = ' ';
+                            is_emoji = false;
                         } else if s == 0b00111111 {
-                            c1 = '-'; c2 = '/'; is_emoji = false;
+                            c1 = '-';
+                            c2 = '/';
+                            is_emoji = false;
                         } else if s == 0b10011111 {
-                            c1 = '\\'; c2 = '-'; is_emoji = false;
+                            c1 = '\\';
+                            c2 = '-';
+                            is_emoji = false;
                         } else if s == 0b00011111 {
-                            c1 = '-'; c2 = '-'; is_emoji = false;
+                            c1 = '-';
+                            c2 = '-';
+                            is_emoji = false;
                         } else if s == 0b00001111 {
-                            c1 = ' '; c2 = '_'; is_emoji = false;
+                            c1 = ' ';
+                            c2 = '_';
+                            is_emoji = false;
                         } else if s == 0b00010111 {
-                            c1 = '_'; c2 = ' '; is_emoji = false;
+                            c1 = '_';
+                            c2 = ' ';
+                            is_emoji = false;
                         } else if s == 0b00000111 {
-                            c1 = '_'; c2 = '_'; is_emoji = false;
+                            c1 = '_';
+                            c2 = '_';
+                            is_emoji = false;
                         }
 
                         // 现在是一个像素对一个字符（128 列），
                         // 所以边缘图案那对字符里挑更有信息量的那个
                         let ch = if c1 == ' ' && c2 != ' ' { c2 } else { c1 };
                         t.write(y as _, x as _, custom, ch, None, (r, g, b));
-                    },
+                    }
                     None => {
                         idx = idx + 1;
                         t.write(y as _, x as _, false, ' ', None, (0, 0, 0));
-                    },
+                    }
                 }
             }
         }
     }
 
-    pub fn render_ascii(&mut self, ctx: &context::Context, framecount: i32, players: &avatar::PalettePlayers, palette: &avatar::Palette, forsen: bool) {
+    pub fn render_ascii(
+        &mut self,
+        ctx: &context::Context,
+        framecount: i32,
+        players: &avatar::PalettePlayers,
+        palette: &avatar::Palette,
+        forsen: bool,
+    ) {
         let mut stdout = std::io::stdout().into_raw_mode().unwrap();
 
         let bg = if forsen {
-            colored::customcolors::CustomColor::new(
-                0x2c,
-                0x52,
-                0x39,
-            )
+            colored::customcolors::CustomColor::new(0x2c, 0x52, 0x39)
         } else {
             colored::customcolors::CustomColor::new(
                 ctx.bgcolor.0 as u8,
@@ -386,17 +521,9 @@ impl Framebuffer {
             )
         };
         let bgcustom = if forsen {
-            colored::customcolors::CustomColor::new(
-                bg.r / 2,
-                bg.g / 2,
-                bg.b / 2,
-            )
+            colored::customcolors::CustomColor::new(bg.r / 2, bg.g / 2, bg.b / 2)
         } else {
-            colored::customcolors::CustomColor::new(
-                bg.r + 1,
-                bg.g + 1,
-                bg.b + 1,
-            )
+            colored::customcolors::CustomColor::new(bg.r + 1, bg.g + 1, bg.b + 1)
         };
 
         if (framecount % 6) == 0 {
@@ -411,26 +538,46 @@ impl Framebuffer {
                             let (_, wordref, pal) = palette.lookup(col);
                             let (r, g, b) = match pal {
                                 avatar::PaletteEntry::Color(c) => c,
-                                avatar::PaletteEntry::Pattern { width, height, pixels } =>
-                                    if let Some(pcol) = pixels.get(((x % height) * width + (y % width)) as usize) {
-                                        *pcol
-                                    } else {
-                                        col
-                                    },
-                                avatar::PaletteEntry::Animation { delay, width, height, frames } => {
-                                    let pixels: &Vec<(u8, u8, u8)> = frames.get(((framecount / delay.max(1)) % frames.len() as i32) as usize).unwrap();
-                                    if let Some(pcol) = pixels.get(((x % height) * width + (y % width)) as usize) {
+                                avatar::PaletteEntry::Pattern {
+                                    width,
+                                    height,
+                                    pixels,
+                                } => {
+                                    if let Some(pcol) =
+                                        pixels.get(((x % height) * width + (y % width)) as usize)
+                                    {
                                         *pcol
                                     } else {
                                         col
                                     }
-                                },
+                                }
+                                avatar::PaletteEntry::Animation {
+                                    delay,
+                                    width,
+                                    height,
+                                    frames,
+                                } => {
+                                    let pixels: &Vec<(u8, u8, u8)> = frames
+                                        .get(
+                                            ((framecount / delay.max(1)) % frames.len() as i32)
+                                                as usize,
+                                        )
+                                        .unwrap();
+                                    if let Some(pcol) =
+                                        pixels.get(((x % height) * width + (y % width)) as usize)
+                                    {
+                                        *pcol
+                                    } else {
+                                        col
+                                    }
+                                }
                                 avatar::PaletteEntry::Video => {
                                     context::PaletteType::from_color(col)
-                                        .as_ref().and_then(|pty| players.players.get(pty))
+                                        .as_ref()
+                                        .and_then(|pty| players.players.get(pty))
                                         .and_then(|player| Some(player.get_pixel(x, y)))
                                         .unwrap_or(col)
-                                },
+                                }
                             };
 
                             let wordlen = wordref.chars().count();
@@ -438,43 +585,89 @@ impl Framebuffer {
                             let mut is_emoji = emojis::get(&format!("{}", c1)).is_some();
                             idx = idx + 1;
                             let mut c2 = wordref.chars().nth(idx % wordlen).unwrap();
-                            if emojis::get(&format!("{}", c2)).is_some() { c2 = '.'; }
+                            if emojis::get(&format!("{}", c2)).is_some() {
+                                c2 = '.';
+                            }
                             idx = idx + 1;
 
                             let s = self.get_surrounding(ctx.bgcolor, x, y);
                             if s == 0b01101011 || s == 0b01101111 {
-                                c1 = '|'; is_emoji = false;
+                                c1 = '|';
+                                is_emoji = false;
                             } else if is_left_edge_bar(s) {
-                                if is_emoji { c1 = '.'; }
-                                c2 = '|'; is_emoji = false;
-                            } else if s == 0b00101011 || s == 0b00101111 || s == 0b00101110 || s == 0b00101100 || s == 0b00001011 {
-                                c1 = ' '; c2 = '/'; is_emoji = false;
-                            } else if s == 0b10010110 || s == 0b10010111 || s == 0b10010011 || s == 0b10010001 || s == 0b00010110 {
-                                c1 = '\\'; c2 = ' '; is_emoji = false;
+                                if is_emoji {
+                                    c1 = '.';
+                                }
+                                c2 = '|';
+                                is_emoji = false;
+                            } else if s == 0b00101011
+                                || s == 0b00101111
+                                || s == 0b00101110
+                                || s == 0b00101100
+                                || s == 0b00001011
+                            {
+                                c1 = ' ';
+                                c2 = '/';
+                                is_emoji = false;
+                            } else if s == 0b10010110
+                                || s == 0b10010111
+                                || s == 0b10010011
+                                || s == 0b10010001
+                                || s == 0b00010110
+                            {
+                                c1 = '\\';
+                                c2 = ' ';
+                                is_emoji = false;
                             } else if s == 0b00111111 {
-                                c1 = '-'; c2 = '/'; is_emoji = false;
+                                c1 = '-';
+                                c2 = '/';
+                                is_emoji = false;
                             } else if s == 0b10011111 {
-                                c1 = '\\'; c2 = '-'; is_emoji = false;
+                                c1 = '\\';
+                                c2 = '-';
+                                is_emoji = false;
                             } else if s == 0b00011111 {
-                                c1 = '-'; c2 = '-'; is_emoji = false;
+                                c1 = '-';
+                                c2 = '-';
+                                is_emoji = false;
                             } else if s == 0b00001111 {
-                                c1 = ' '; c2 = '_'; is_emoji = false;
+                                c1 = ' ';
+                                c2 = '_';
+                                is_emoji = false;
                             } else if s == 0b00010111 {
-                                c1 = '_'; c2 = ' '; is_emoji = false;
+                                c1 = '_';
+                                c2 = ' ';
+                                is_emoji = false;
                             } else if s == 0b00000111 {
-                                c1 = '_'; c2 = '_'; is_emoji = false;
+                                c1 = '_';
+                                c2 = '_';
+                                is_emoji = false;
                             }
 
                             if is_emoji {
-                                write!(output, "{}", format!("{}", c1).truecolor(r, g, b).on_custom_color(bgcustom)).unwrap();
+                                write!(
+                                    output,
+                                    "{}",
+                                    format!("{}", c1)
+                                        .truecolor(r, g, b)
+                                        .on_custom_color(bgcustom)
+                                )
+                                .unwrap();
                             } else {
-                                write!(output, "{}", format!("{}{}", c1, c2).truecolor(r, g, b).on_custom_color(bgcustom)).unwrap();
+                                write!(
+                                    output,
+                                    "{}",
+                                    format!("{}{}", c1, c2)
+                                        .truecolor(r, g, b)
+                                        .on_custom_color(bgcustom)
+                                )
+                                .unwrap();
                             }
-                        },
+                        }
                         None => {
                             idx = idx + 1;
                             write!(output, "{}", "  ".to_owned().on_custom_color(bg)).unwrap();
-                        },
+                        }
                     }
                 }
                 write!(output, "\r\n").unwrap();
@@ -522,43 +715,89 @@ impl Framebuffer {
                             let mut is_emoji = emojis::get(&format!("{}", c1)).is_some();
                             idx = idx + 1;
                             let mut c2 = wordref.chars().nth(idx % wordlen).unwrap();
-                            if emojis::get(&format!("{}", c2)).is_some() { c2 = '.'; }
+                            if emojis::get(&format!("{}", c2)).is_some() {
+                                c2 = '.';
+                            }
                             idx = idx + 1;
 
                             let s = self.get_surrounding(ctx.bgcolor, x, y);
                             if s == 0b01101011 || s == 0b01101111 {
-                                c1 = '|'; is_emoji = false;
+                                c1 = '|';
+                                is_emoji = false;
                             } else if is_left_edge_bar(s) {
-                                if is_emoji { c1 = '.'; }
-                                c2 = '|'; is_emoji = false;
-                            } else if s == 0b00101011 || s == 0b00101111 || s == 0b00101110 || s == 0b00101100 || s == 0b00001011 {
-                                c1 = ' '; c2 = '/'; is_emoji = false;
-                            } else if s == 0b10010110 || s == 0b10010111 || s == 0b10010011 || s == 0b10010001 || s == 0b00010110 {
-                                c1 = '\\'; c2 = ' '; is_emoji = false;
+                                if is_emoji {
+                                    c1 = '.';
+                                }
+                                c2 = '|';
+                                is_emoji = false;
+                            } else if s == 0b00101011
+                                || s == 0b00101111
+                                || s == 0b00101110
+                                || s == 0b00101100
+                                || s == 0b00001011
+                            {
+                                c1 = ' ';
+                                c2 = '/';
+                                is_emoji = false;
+                            } else if s == 0b10010110
+                                || s == 0b10010111
+                                || s == 0b10010011
+                                || s == 0b10010001
+                                || s == 0b00010110
+                            {
+                                c1 = '\\';
+                                c2 = ' ';
+                                is_emoji = false;
                             } else if s == 0b00111111 {
-                                c1 = '-'; c2 = '/'; is_emoji = false;
+                                c1 = '-';
+                                c2 = '/';
+                                is_emoji = false;
                             } else if s == 0b10011111 {
-                                c1 = '\\'; c2 = '-'; is_emoji = false;
+                                c1 = '\\';
+                                c2 = '-';
+                                is_emoji = false;
                             } else if s == 0b00011111 {
-                                c1 = '-'; c2 = '-'; is_emoji = false;
+                                c1 = '-';
+                                c2 = '-';
+                                is_emoji = false;
                             } else if s == 0b00001111 {
-                                c1 = ' '; c2 = '_'; is_emoji = false;
+                                c1 = ' ';
+                                c2 = '_';
+                                is_emoji = false;
                             } else if s == 0b00010111 {
-                                c1 = '_'; c2 = ' '; is_emoji = false;
+                                c1 = '_';
+                                c2 = ' ';
+                                is_emoji = false;
                             } else if s == 0b00000111 {
-                                c1 = '_'; c2 = '_'; is_emoji = false;
+                                c1 = '_';
+                                c2 = '_';
+                                is_emoji = false;
                             }
 
                             if is_emoji {
-                                write!(stdout, "{}", format!("{}", c1).truecolor(r, g, b).on_custom_color(bgcustom)).unwrap();
+                                write!(
+                                    stdout,
+                                    "{}",
+                                    format!("{}", c1)
+                                        .truecolor(r, g, b)
+                                        .on_custom_color(bgcustom)
+                                )
+                                .unwrap();
                             } else {
-                                write!(stdout, "{}", format!("{}{}", c1, c2).truecolor(r, g, b).on_custom_color(bgcustom)).unwrap();
+                                write!(
+                                    stdout,
+                                    "{}",
+                                    format!("{}{}", c1, c2)
+                                        .truecolor(r, g, b)
+                                        .on_custom_color(bgcustom)
+                                )
+                                .unwrap();
                             }
-                        },
+                        }
                         None => {
                             idx = idx + 1;
                             write!(stdout, "  ").unwrap();
-                        },
+                        }
                     }
                 }
                 write!(stdout, "\r\n").unwrap();
@@ -593,12 +832,13 @@ impl Framebuffer {
                             let mut c2 = wordref.chars().nth(idx % wordlen).unwrap();
                             idx = idx + 1;
 
-                            write!(stdout, "{}", format!("{}{}", c1, c2).truecolor(nr, ng, nb)).unwrap();
-                        },
+                            write!(stdout, "{}", format!("{}{}", c1, c2).truecolor(nr, ng, nb))
+                                .unwrap();
+                        }
                         None => {
                             idx = idx + 1;
                             write!(stdout, "  ").unwrap();
-                        },
+                        }
                     }
                 }
                 write!(stdout, "\r\n").unwrap();
@@ -606,4 +846,3 @@ impl Framebuffer {
         }
     }
 }
-

@@ -1,10 +1,14 @@
-use std::io::Write;
-use colored::Colorize;
 use byteorder::WriteBytesExt;
+use colored::Colorize;
+use std::io::Write;
 
 fn choose_glyph(custom: bool, g: char, v: f32) -> char {
-    if custom { return g; }
-    if g == ' ' || g == '/' || g == '-' || g == '_' || g == '\\' { return g; }
+    if custom {
+        return g;
+    }
+    if g == ' ' || g == '/' || g == '-' || g == '_' || g == '\\' {
+        return g;
+    }
     if v < 0.2 {
         '.'
     } else if v < 0.4 {
@@ -31,10 +35,16 @@ pub enum Cell {
 
 impl Cell {
     pub fn serialize<W>(&self, out: &mut W) -> Option<()>
-    where W: Write
+    where
+        W: Write,
     {
         match self {
-            Self::Foreground { custom_glyph, glyph0, glyph1, color } => {
+            Self::Foreground {
+                custom_glyph,
+                glyph0,
+                glyph1,
+                color,
+            } => {
                 out.write_u8(1).ok()?;
                 out.write_u8(if *custom_glyph { 1 } else { 0 }).ok()?;
                 out.write_u8(color.0).ok()?;
@@ -47,10 +57,10 @@ impl Cell {
                 } else {
                     out.write_u8(0).ok()?;
                 }
-            },
+            }
             Self::Background => {
                 out.write_u8(0).ok()?;
-            },
+            }
         }
         Some(())
     }
@@ -72,16 +82,16 @@ impl Diff {
                 }
             }
         }
-        Self {
-            diff,
-        }
+        Self { diff }
     }
 
     pub fn serialize<W>(&self, out: &mut W)
-    where W: Write
+    where
+        W: Write,
     {
         out.write_u8(1).unwrap();
-        out.write_u32::<byteorder::BigEndian>(self.diff.len() as _).unwrap();
+        out.write_u32::<byteorder::BigEndian>(self.diff.len() as _)
+            .unwrap();
         for (x, y, c) in self.diff.iter() {
             out.write_u8(*x).unwrap();
             out.write_u8(*y).unwrap();
@@ -92,7 +102,8 @@ impl Diff {
     pub fn serialize_and_compress(&self) -> Vec<u8> {
         let mut ret = Vec::new();
         {
-            let mut writer = flate2::write::GzEncoder::new(&mut ret, flate2::Compression::default());
+            let mut writer =
+                flate2::write::GzEncoder::new(&mut ret, flate2::Compression::default());
             self.serialize(&mut writer);
         }
         ret
@@ -118,20 +129,36 @@ impl Term {
 
     /// 终端尺寸变化时重建网格（不换对象，方便上层拿着 &mut 引用）
     pub fn resize(&mut self, w: usize, h: usize) {
-        if self.w == w && self.h == h { return }
+        if self.w == w && self.h == h {
+            return;
+        }
         self.w = w;
         self.h = h;
         self.cells = vec![vec![Cell::Background; w]; h];
     }
 
-    pub fn write(&mut self, x: usize, y: usize, custom_glyph: bool, glyph0: char, glyph1: Option<char>, color: (u8, u8, u8)) {
+    pub fn write(
+        &mut self,
+        x: usize,
+        y: usize,
+        custom_glyph: bool,
+        glyph0: char,
+        glyph1: Option<char>,
+        color: (u8, u8, u8),
+    ) {
         if y < self.h && x < self.w {
-            self.cells[y][x] = Cell::Foreground { custom_glyph, glyph0, glyph1, color, };
+            self.cells[y][x] = Cell::Foreground {
+                custom_glyph,
+                glyph0,
+                glyph1,
+                color,
+            };
         }
     }
 
     pub fn serialize<W>(&self, out: &mut W)
-    where W: Write
+    where
+        W: Write,
     {
         out.write_u8(0).unwrap();
         for row in self.cells.iter() {
@@ -144,7 +171,8 @@ impl Term {
     pub fn serialize_and_compress(&self) -> Vec<u8> {
         let mut ret = Vec::new();
         {
-            let mut writer = flate2::write::GzEncoder::new(&mut ret, flate2::Compression::default());
+            let mut writer =
+                flate2::write::GzEncoder::new(&mut ret, flate2::Compression::default());
             self.serialize(&mut writer);
         }
         ret
@@ -163,20 +191,27 @@ impl Term {
         let left = (bounds.w - content.w) / 2;
         let top = (bounds.h - content.h) / 2;
         let mut output = Vec::new();
-        write!(output, "\x1b[?2026h\x1b[?25l\x1b[48;2;{};{};{}m", bg.0, bg.1, bg.2).unwrap();
+        write!(
+            output,
+            "\x1b[?2026h\x1b[?25l\x1b[48;2;{};{};{}m",
+            bg.0, bg.1, bg.2
+        )
+        .unwrap();
         let mut current_color = None;
         for y in 0..bounds.h {
             write!(output, "\x1b[{};1H", y + 1).unwrap();
             for x in 0..bounds.w {
-                let (glyph, color) = if x >= left && x < left + content.w
-                    && y >= top && y < top + content.h {
-                    let sx = ((x - left) * self.w / content.w).min(self.w - 1);
-                    let sy = ((y - top) * self.h / content.h).min(self.h - 1);
-                    match self.cells[sy][sx] {
-                        Cell::Foreground { glyph0, color, .. } => (glyph0, color),
-                        Cell::Background => (' ', bg),
-                    }
-                } else { (' ', bg) };
+                let (glyph, color) =
+                    if x >= left && x < left + content.w && y >= top && y < top + content.h {
+                        let sx = ((x - left) * self.w / content.w).min(self.w - 1);
+                        let sy = ((y - top) * self.h / content.h).min(self.h - 1);
+                        match self.cells[sy][sx] {
+                            Cell::Foreground { glyph0, color, .. } => (glyph0, color),
+                            Cell::Background => (' ', bg),
+                        }
+                    } else {
+                        (' ', bg)
+                    };
                 if current_color != Some(color) {
                     write!(output, "\x1b[38;2;{};{};{}m", color.0, color.1, color.2).unwrap();
                     current_color = Some(color);
@@ -192,28 +227,42 @@ impl Term {
 
     /// 导出当前帧的字符快照，给本地推流服务用
     pub fn snapshot(&self) -> Vec<Vec<(char, (u8, u8, u8))>> {
-        self.cells.iter().map(|row| {
-            row.iter().map(|cell| match cell {
-                Cell::Foreground { glyph0, color, .. } => (*glyph0, *color),
-                Cell::Background => (' ', (0, 0, 0)),
-            }).collect()
-        }).collect()
+        self.cells
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|cell| match cell {
+                        Cell::Foreground { glyph0, color, .. } => (*glyph0, *color),
+                        Cell::Background => (' ', (0, 0, 0)),
+                    })
+                    .collect()
+            })
+            .collect()
     }
 
     pub fn render_stream<W>(&self, out: &mut W, bg: (u8, u8, u8))
-    where W: Write {
+    where
+        W: Write,
+    {
         let buf = self.encode_stream(bg);
         out.write_all(&buf).unwrap();
     }
 
     pub fn render_stream_nocolor<W>(&self, out: &mut W)
-    where W: Write {
+    where
+        W: Write,
+    {
         let mut output: Vec<u8> = Vec::new();
         write!(output, "\x1b[2J\x1b[1;1H").unwrap();
         for row in self.cells.iter() {
             for cell in row.iter() {
                 match cell {
-                    Cell::Foreground { custom_glyph, glyph0, glyph1, color, } => {
+                    Cell::Foreground {
+                        custom_glyph,
+                        glyph0,
+                        glyph1,
+                        color,
+                    } => {
                         let r: f32 = (color.0 as f32) / 255.0;
                         let g: f32 = (color.1 as f32) / 255.0;
                         let b: f32 = (color.2 as f32) / 255.0;
@@ -225,17 +274,11 @@ impl Term {
                                 choose_glyph(*custom_glyph, *g, mono)
                             )
                         } else {
-                            format!(
-                                "{}",
-                                choose_glyph(*custom_glyph, *glyph0, mono)
-                            )
+                            format!("{}", choose_glyph(*custom_glyph, *glyph0, mono))
                         };
-                        write!(
-                            output, "{}",
-                            s
-                        ).unwrap();
-                    },
-                    Cell::Background => {},
+                        write!(output, "{}", s).unwrap();
+                    }
+                    Cell::Background => {}
                 }
             }
             write!(output, "\r\n").unwrap();
@@ -244,13 +287,20 @@ impl Term {
     }
 
     pub fn render_stream_nocolor_small<W>(&self, out: &mut W)
-    where W: Write {
+    where
+        W: Write,
+    {
         let mut output: Vec<u8> = Vec::new();
         write!(output, "\x1b[2J\x1b[1;1H").unwrap();
         for row in self.cells.iter().step_by(2) {
             for cell in row.iter().step_by(2) {
                 match cell {
-                    Cell::Foreground { custom_glyph, glyph0, glyph1, color, } => {
+                    Cell::Foreground {
+                        custom_glyph,
+                        glyph0,
+                        glyph1,
+                        color,
+                    } => {
                         let r: f32 = (color.0 as f32) / 255.0;
                         let g: f32 = (color.1 as f32) / 255.0;
                         let b: f32 = (color.2 as f32) / 255.0;
@@ -262,17 +312,11 @@ impl Term {
                                 choose_glyph(*custom_glyph, *g, mono)
                             )
                         } else {
-                            format!(
-                                "{}",
-                                choose_glyph(*custom_glyph, *glyph0, mono)
-                            )
+                            format!("{}", choose_glyph(*custom_glyph, *glyph0, mono))
                         };
-                        write!(
-                            output, "{}",
-                            s
-                        ).unwrap();
-                    },
-                    Cell::Background => {},
+                        write!(output, "{}", s).unwrap();
+                    }
+                    Cell::Background => {}
                 }
             }
             write!(output, "\r\n").unwrap();
@@ -280,7 +324,6 @@ impl Term {
         out.write_all(&output).unwrap();
     }
 }
-
 
 #[cfg(test)]
 mod layout_tests {
