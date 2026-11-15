@@ -13,14 +13,17 @@ pub const TRACKING_TIMEOUT: Duration = Duration::from_secs(2);
 /// 平滑系数的标定基准：`COLONQ_SMOOTH` 按"每 1/30 秒收到一个包"来标定。
 const SMOOTH_REF_DT: f32 = 1.0 / 30.0;
 
-/// 把 `COLONQ_SMOOTH`（0~0.95，越大越平滑）换算成**与包率无关**的混合系数。
+/// 把 `COLONQ_SMOOTH`（0~0.95，越大越平滑）换算成混合系数。
 ///
-/// 旧做法是每个包固定混 `1 - smooth`，于是面捕端发 15fps 和 30fps 时手感完全不同
-/// （包率越低越迟钝）。这里改成按时间做指数衰减：
-/// `alpha = 1 - smooth^(dt / SMOOTH_REF_DT)`。
-/// 在 30 包/秒时与旧行为**完全一致**；包率降低时 alpha 自动变大（不会变迟钝），
-/// 包率升高时自动变小（平滑量不变），长时间断流后重新收到包则几乎直接吸附。
-pub fn smooth_alpha(smooth: f32, dt: f32) -> f32 {
+/// 旧做法是每个包固定混 `1 - smooth`：稳态手心感固定，但面捕端帧率一变手感就变。
+/// 这里改成按时间做指数衰减 `alpha = 1 - smooth^(dt / 标称间隔)`：
+///
+/// - `nominal_dt` 用**实测的包间隔**（见 TrackingState::nominal_dt），因此稳态下
+///   `dt ≈ nominal_dt`，alpha 恰好等于旧的 `1 - smooth` —— **手感与原版完全一致**，
+///   不会因为面捕端是 30fps 还是 60fps 而变得迟钝。
+/// - 只有丢包、掉帧（`dt` 明显大于标称值）时才额外补偿，长时间断流后几乎直接吸附。
+/// - `nominal_dt` 还没测出来（首包）时退回 `SMOOTH_REF_DT`。
+pub fn smooth_alpha(smooth: f32, dt: f32, nominal_dt: f32) -> f32 {
     let s = smooth.clamp(0.0, 0.95);
     if s <= 0.001 {
         return 1.0; // 关闭平滑
@@ -28,7 +31,8 @@ pub fn smooth_alpha(smooth: f32, dt: f32) -> f32 {
     if !(dt > 0.0) {
         return 1.0 - s; // dt 不可用（首包/时钟异常）时退回旧公式
     }
-    (1.0 - s.powf(dt / SMOOTH_REF_DT)).clamp(0.0, 1.0)
+    let reference = if nominal_dt > 0.001 { nominal_dt } else { SMOOTH_REF_DT };
+    (1.0 - s.powf(dt / reference)).clamp(0.0, 1.0)
 }
 
 /// facetracker.py 单脸数据包长度（见 tools/openseeface-server.patch 的字段表）
@@ -67,6 +71,8 @@ pub struct TrackingState {
     pub orientation: glam::Quat,
     /// 最近一次收到有效面捕包的时间；None = 从未收到
     pub last_packet: Option<Instant>,
+    /// 实测的包间隔（秒）：平滑系数的"标称周期"，让手感不随面捕端帧率变化
+    pub nominal_dt: f32,
 }
 
 impl TrackingState {
@@ -87,6 +93,7 @@ impl TrackingState {
             ]),
             orientation: glam::Quat::IDENTITY,
             last_packet: None,
+            nominal_dt: 0.0,
         }
     }
 
@@ -151,7 +158,21 @@ fn parse_packet(buf: &[u8], sts: &SharedTrackingState, diag: bool, counter: u64,
     let dt = state.last_packet
         .map(|t| now.saturating_duration_since(t).as_secs_f32())
         .unwrap_or(0.0);
-    let alpha = smooth_alpha(smooth, dt);
+    // 用实测包间隔做标称周期（慢速 EMA，抗抖动）：稳态下 alpha 就等于 1 - smooth，
+    // 即和改动前的手感一致；只有丢包/掉帧时才会额外补偿。
+    if dt > 0.002 && dt < 0.5 {
+        state.nominal_dt = if state.nominal_dt <= 0.001 {
+            dt
+        } else {
+            state.nominal_dt + (dt - state.nominal_dt) * 0.05
+        };
+    }
+    let alpha = smooth_alpha(smooth, dt, state.nominal_dt);
+    // 每 300 个包报告一次实测包率，方便判断"延迟高是不是面捕端帧率太低"
+    if counter % 300 == 0 && state.nominal_dt > 0.001 {
+        log::info!("面捕包率 ≈ {:.1} Hz（间隔 {:.1} ms），平滑系数 smooth={} → 稳态混合 {:.2}",
+                   1.0 / state.nominal_dt, state.nominal_dt * 1000.0, smooth, 1.0 - smooth);
+    }
     let smoothing = alpha < 1.0 && state.last_packet.is_some();
     if smoothing {
         let prev = state.orientation;
@@ -295,25 +316,32 @@ mod tests {
     }
 
     #[test]
-    fn smooth_alpha_matches_old_behaviour_at_reference_rate() {
-        // 30 包/秒（基准）时必须等于旧公式 1 - smooth，否则升级会悄悄改变手感
-        assert!((smooth_alpha(0.5, 1.0 / 30.0) - 0.5).abs() < 1e-5);
-        assert!((smooth_alpha(0.8, 1.0 / 30.0) - 0.2).abs() < 1e-5);
+    fn steady_state_alpha_equals_old_formula_at_any_packet_rate() {
+        // 关键回归：无论面捕端是 30 还是 60 包/秒，稳态下 alpha 都必须等于旧的
+        // 1 - smooth。否则升级会让"响应变慢"，体感就是"动捕延迟变高"。
+        for &hz in &[15.0f32, 24.0, 30.0, 60.0, 120.0] {
+            let nominal = 1.0 / hz;
+            let alpha = smooth_alpha(0.5, nominal, nominal);
+            assert!((alpha - 0.5).abs() < 1e-5, "hz={} alpha={}", hz, alpha);
+        }
         // 关闭平滑
-        assert_eq!(smooth_alpha(0.0, 1.0 / 30.0), 1.0);
+        assert_eq!(smooth_alpha(0.0, 1.0 / 30.0, 1.0 / 30.0), 1.0);
+        // 还没测出标称间隔时退回 30fps 基准
+        assert!((smooth_alpha(0.5, 1.0 / 30.0, 0.0) - 0.5).abs() < 1e-5);
     }
 
     #[test]
-    fn smooth_alpha_compensates_packet_rate() {
-        // 15 包/秒：间隔翻倍，单包系数变大，整体响应速度不变
-        assert!((smooth_alpha(0.5, 2.0 / 30.0) - 0.75).abs() < 1e-5);
-        // 60 包/秒：间隔减半，单包系数变小
-        assert!((smooth_alpha(0.5, 0.5 / 30.0) - (1.0 - 0.5f32.sqrt())).abs() < 1e-5);
-        // 断流一秒后重连：几乎直接吸附到新姿态
-        assert!(smooth_alpha(0.5, 1.0) > 0.999);
-        // 两个 1/30 秒的包累积效果 == 一个 2/30 秒的包（指数衰减自洽）
-        let two_steps = 1.0 - (1.0 - smooth_alpha(0.5, 1.0 / 30.0)).powi(2);
-        assert!((two_steps - smooth_alpha(0.5, 2.0 / 30.0)).abs() < 1e-5);
+    fn smooth_alpha_compensates_jitter_and_dropouts() {
+        let nominal = 1.0 / 60.0; // 面捕端 60 包/秒
+        // 正常一帧：等于旧公式
+        assert!((smooth_alpha(0.5, nominal, nominal) - 0.5).abs() < 1e-5);
+        // 掉了一个包（间隔翻倍）：系数变大，追得更紧
+        assert!((smooth_alpha(0.5, 2.0 * nominal, nominal) - 0.75).abs() < 1e-5);
+        // 断流一秒后重连：几乎直接吸附
+        assert!(smooth_alpha(0.5, 1.0, nominal) > 0.999);
+        // 指数衰减自洽：两个短间隔 == 一个长间隔
+        let two_steps = 1.0 - (1.0 - smooth_alpha(0.5, nominal, nominal)).powi(2);
+        assert!((two_steps - smooth_alpha(0.5, 2.0 * nominal, nominal)).abs() < 1e-5);
     }
 
     #[test]
