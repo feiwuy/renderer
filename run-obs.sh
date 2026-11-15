@@ -95,10 +95,14 @@ export COLONQ_EYE_SURPRISE="${COLONQ_EYE_SURPRISE:-0.65}"      # 瞪眼→惊讶
 # 笑到眯眼（>＜ 笑眼）：借用 relaxed / ih 两个槽位，权重按 happy 斜坡给出
 export COLONQ_EYE_LAUGH="${COLONQ_EYE_LAUGH:-1}"               # 0 = 关掉笑眼
 export COLONQ_EYE_LAUGH_SRC="${COLONQ_EYE_LAUGH_SRC:-either}"  # happy / mouth / either
-# export COLONQ_EYE_LAUGH_LO=0.55 / _HI=0.95                   # 斜坡：多少开始眯、多少拉满
+# export COLONQ_EYE_LAUGH_LO=0.45 / _HI=0.95                   # 斜坡：多少开始眯、多少拉满
 # export COLONQ_EYE_LAUGH_CLOSE=1.0 / _IRIS=0.9                # 眯眼 / 眼珠变白的强度
 # 嘴部：灵敏度（起效点）和幅度上限分开调
 export COLONQ_MOUTH_MAX="${COLONQ_MOUTH_MAX:-0.7}"             # 张嘴最大幅度
+# 单眼 wink：占用 ih / ee 两个槽位（元音口型少两个），也会顶掉笑眼的"眼珠变白"
+export COLONQ_WINK="${COLONQ_WINK:-1}"
+# export COLONQ_WINK_DEAD=0.25 / _FULL=0.75         # 死区 / 拉满（一行一个变量）
+# export COLONQ_WINK_SWAP=1                         # 左右对调（默认是镜像约定）
 # export COLONQ_MOUTH_GAIN=1.8 / COLONQ_MOUTH_CURVE=1.0        # 多小的张口就开始动
 # export COLONQ_EXPR_MAP="relaxed=blinkLeft"               # 槽位换绑
 # export COLONQ_LOG=debug / COLONQ_TRACK_DEBUG=2           # 调参时开

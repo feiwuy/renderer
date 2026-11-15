@@ -133,6 +133,9 @@ VRM 模型 ──gltf 载入──> VAO/骨骼/表情属性
 | `COLONQ_EXPR_EXTRA` | 未设 | 给槽位**追加**额外 morph target（VRM 规范里一个表情可以绑多个），如 `happy=17,23:0.8;sad=16`。加载时按权重把多个 target 相加成一份缓冲区，一个槽位仍只占一个属性 |
 | `COLONQ_EYE_LAUGH` | 关 | `1` = 开启"笑到眯眼"（`>＜` 笑眼）：`relaxed` 槽改绑"整只眼闭上"的 morph、`ih` 槽改绑"眼珠变白"的 morph，权重由 happy 强度斜坡给出。**代价是 `relaxed`/`ih` 两个表情被占用** |
 | `COLONQ_EYE_LAUGH_LO` / `_HI` | `0.55` / `0.95` | 笑眼斜坡：触发量超过 `LO` 才开始眯、到 `HI` 拉满 |
+| `COLONQ_WINK` | 关 | `1` = 单眼 wink：`ih` 槽改绑 `blinkLeft`、`ee` 槽改绑 `blinkRight`，权重由**两眼闭合度之差**给出。**代价是 `ih`/`ee` 两个元音口型被占用**（也会顶掉笑眼的"眼珠变白"那一路） |
+| `COLONQ_WINK_DEAD` / `_FULL` | `0.25` / `0.75` | wink 死区：两眼闭合度差小于 `DEAD` 不算（滤掉自然眨眼的左右差异），到 `FULL` 拉满 |
+| `COLONQ_WINK_SWAP` | 关 | `1` = 左右对调。默认是**镜像约定**（你左眼眨 → 画面左边那只眼闭），想反过来说一声就加这个 |
 | `COLONQ_EYE_LAUGH_SRC` | `either` | 笑眼触发源：`happy`=只认嘴角笑、`mouth`=只认张嘴（说话也会眯眼，一般别用）、`either`=嘴角笑**或**"有笑意的张嘴"取大 —— 单纯张嘴不算，所以说话不会眯眼 |
 | `COLONQ_EYE_LAUGH_CLOSE` / `_IRIS` | `1.0` / `0.9` | 眯眼 / 眼珠变白的最大权重。觉得"眼睛整个没了"就把 `_IRIS` 调小或设 `0` |
 | `COLONQ_MOUTH_GAIN` | `1.8` | **嘴部灵敏度**：`mouth_open` 特征先乘它再夹到 0~1。`1.8` 表示"小张口就有明显嘴型"，觉得嘴动得太多就调回 `1.2`，还是"要张很大才有反应"就`2.5` |

@@ -349,13 +349,27 @@ impl Scene {
         //   权重由 tracking.rs 按 happy 强度斜坡给出（见 ExprOptions::eye_laugh）。
         //   依据 VRM 1.0 的程序化表情组规范：Mouth 组在笑的时候要让位，
         //   Blink 组则可以用 overrideBlink 抑制，这里用两个空闲槽位做"派生表情"。
-        if crate::tracking::ExprOptions::from_env().eye_laugh {
+        let expr_opts = crate::tracking::ExprOptions::from_env();
+        if expr_opts.eye_laugh {
             overrides
                 .entry("relaxed".to_string())
                 .or_insert_with(|| "17".to_string());
+            // "眼珠变白"那一路也要占 ih 槽；开了 wink 时 ih 归 wink，就让位
+            if !expr_opts.wink {
+                overrides
+                    .entry("ih".to_string())
+                    .or_insert_with(|| "23".to_string());
+            }
+        }
+        // 单眼 wink：ih 槽 ← blinkLeft、ee 槽 ← blinkRight（VRM 里两个独立 preset）。
+        // 代价是 ih / ee 这两个元音口型被占用；需要的话用 COLONQ_EXPR_MAP 自己重排。
+        if expr_opts.wink {
             overrides
                 .entry("ih".to_string())
-                .or_insert_with(|| "23".to_string());
+                .or_insert_with(|| "blinkLeft".to_string());
+            overrides
+                .entry("ee".to_string())
+                .or_insert_with(|| "blinkRight".to_string());
         }
         if !overrides.is_empty() {
             log::info!("表情槽重映射: {:?}", overrides);

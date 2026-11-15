@@ -264,6 +264,15 @@ pub struct ExprOptions {
     pub mouth_curve: f32,
     /// 笑眼由什么触发：`0`=嘴角笑、`1`=纯张嘴幅度、`2`=两者取大（默认）
     pub laugh_src: u8,
+    /// 单眼 wink：开启后 `ih` 槽改绑 `blinkLeft`、`ee` 槽改绑 `blinkRight`
+    /// （vrm.rs 负责改绑），权重由两眼闭合程度之差给出。代价是这两个元音口型没了。
+    pub wink: bool,
+    /// wink 死区：两眼闭合度差小于它不算 wink（避免自然眨眼被判成 wink）
+    pub wink_dead: f32,
+    /// 两眼闭合度差达到它时 wink 拉满
+    pub wink_full: f32,
+    /// 左右眼对调（模型/相机镜像时用）
+    pub wink_swap: bool,
     /// 嘴部**幅度上限**：五个口型最后统一乘这个。
     /// 灵敏度（`mouth_gain`）决定"多小的张口就开始动"，这个决定"张到最大时多大" ——
     /// 觉得嘴张得太夸张就调小它，不用牺牲起效点。
@@ -282,6 +291,10 @@ impl Default for ExprOptions {
             laugh_close: 1.0,
             laugh_iris: 0.9,
             laugh_src: 2,
+            wink: false,
+            wink_dead: 0.25,
+            wink_full: 0.75,
+            wink_swap: false,
             mouth_gain: 1.8,
             mouth_curve: 1.0,
             mouth_max: 0.7,
@@ -319,6 +332,10 @@ impl ExprOptions {
                 "mouth" | "open" | "张嘴" | "1" => 1,
                 _ => d.laugh_src,
             },
+            wink: utils::env_flag("COLONQ_WINK", d.wink),
+            wink_dead: read("COLONQ_WINK_DEAD", d.wink_dead),
+            wink_full: read("COLONQ_WINK_FULL", d.wink_full),
+            wink_swap: utils::env_flag("COLONQ_WINK_SWAP", d.wink_swap),
         }
     }
 }
@@ -408,8 +425,11 @@ pub fn compute_weights(f: &RawFeatures, opts: &ExprOptions) -> ExprWeights {
     w.set("aa", (open * wide * 0.95 * m).min(1.0));
     w.set("oh", (open * (1.0 - 0.85 * wide) * m).min(1.0));
     w.set("ou", (narrow * (0.35 + 0.65 * open) * 0.90 * m).min(1.0));
-    w.set("ih", (open_mid * wide * 0.70 * m).min(1.0));
-    w.set("ee", (open_low * wide * 0.60 * m).min(1.0));
+    // 开了 wink 时 ih / ee 两个槽被单眼眨眼占用，元音就不再写这两个（见 blink_and_wink）
+    if !opts.wink {
+        w.set("ih", (open_mid * wide * 0.70 * m).min(1.0));
+        w.set("ee", (open_low * wide * 0.60 * m).min(1.0));
+    }
 
     // 笑到眯眼（`>＜` 笑眼）：借用 relaxed / ih 两个槽位（vrm.rs 已把它们改绑到
     // "整只眼闭上" 和 "眼珠变白" 的 morph），权重按 happy 的斜坡来 ——
@@ -431,6 +451,34 @@ pub fn compute_weights(f: &RawFeatures, opts: &ExprOptions) -> ExprWeights {
         w.set("ih", t * opts.laugh_iris);
     }
     w
+}
+
+/// 由两只眼睛的**张开度**（0=闭、1=睁，facetracker 的 `eye_blink`）算
+/// 「双眼眨眼量」和「左右 wink 量」。
+///
+/// 关键点：单眼闭的时候不能同时触发双眼 blink（否则两只眼一起闭，wink 就看不出来）。
+/// 所以开启 wink 后 `blink` 取两眼闭合度的**较小值**（只有两只眼都闭才算眨眼），
+/// 关闭 wink 时保持原来的平均值（不改变既有手感）。
+///
+/// 返回 `(blink, wink_left, wink_right)`，wink 量带死区：闭合度差小于 `dead` 不算，
+/// 到 `full` 时拉满（自然眨眼时两眼略有差异，靠死区滤掉）。
+pub fn blink_and_wink(open_right: f32, open_left: f32, opts: &ExprOptions) -> (f32, f32, f32) {
+    let closed_r = clamp01(1.0 - open_right);
+    let (closed_r, closed_l) = {
+        let closed_l = clamp01(1.0 - open_left);
+        if opts.wink_swap {
+            (closed_l, closed_r)
+        } else {
+            (closed_r, closed_l)
+        }
+    };
+    if !opts.wink {
+        return ((closed_l + closed_r) * 0.5, 0.0, 0.0);
+    }
+    let both = closed_l.min(closed_r);
+    let wink_l = ramp(closed_l - closed_r, opts.wink_dead, opts.wink_full);
+    let wink_r = ramp(closed_r - closed_l, opts.wink_dead, opts.wink_full);
+    (both, wink_l, wink_r)
 }
 
 /// 线性斜坡：x<=lo 为 0，x>=hi 为 1
@@ -489,8 +537,9 @@ fn parse_packet(
     if buf.len() < PACKET_LEN || !buf.len().is_multiple_of(PACKET_LEN) {
         return false; // 多脸包按 1785 的整数倍拼接；只取第一张脸
     }
-    let left_blinking = byteorder::LittleEndian::read_f32(&buf[BLINK_OFFSET..]);
-    let right_blinking = byteorder::LittleEndian::read_f32(&buf[BLINK_OFFSET + 4..]);
+    // 注意顺序：offset 20 存的是**右**眼张开度，+4 是左眼（facetracker 的 eye_blink[0]/[1]）
+    let open_right = byteorder::LittleEndian::read_f32(&buf[BLINK_OFFSET..]);
+    let open_left = byteorder::LittleEndian::read_f32(&buf[BLINK_OFFSET + 4..]);
     // 包里 14 个特征（offset 1729 起）；不是有限数就当无效包
     let Some(feats) = RawFeatures::read(buf) else {
         return false;
@@ -507,20 +556,30 @@ fn parse_packet(
         && quat.1.is_finite()
         && quat.2.is_finite()
         && quat.3.is_finite()
-        && left_blinking.is_finite()
-        && right_blinking.is_finite()
+        && open_right.is_finite()
+        && open_left.is_finite()
         && mouth_open.is_finite())
     {
         return false;
     }
-    // 闭眼程度：先看包里 offset 20 那两个预算好的值，再和眼特征算出来的取较大者
-    // （二者同源同值，见 RawFeatures::blink_from_eyes），只为交叉校验。
-    let blink = (1.0 - (left_blinking + right_blinking) / 2.0)
-        .clamp(0.0, 1.0)
-        .max(feats.blink_from_eyes());
+    // 两眼张开度：包里 offset 20 是**右**眼、+4 是**左**眼（facetracker 的 eye_blink[0]/[1]）。
+    // 开 wink 时要用左右眼分别的值，所以这里不再直接取平均。
+    let (blink, wink_l, wink_r) = blink_and_wink(open_right, open_left, opts);
+    // 未开 wink 时和眼特征算出的闭眼量交叉校验（facetracker 里二者同源同值）。
+    // 开了 wink 就不能再取大：blink 已经是"两眼都闭"的量，取 max 会把单眼闭也拉成双眼闭。
+    let blink = if opts.wink {
+        blink
+    } else {
+        blink.max(feats.blink_from_eyes())
+    };
     // 14 个特征 → 11 个表情槽（纯函数，不依赖历史值）
     let mut target = compute_weights(&feats, opts);
     target.set("blink", blink);
+    if opts.wink {
+        // ih = 左眼 wink（morph blinkLeft）、ee = 右眼 wink（morph blinkRight），改绑在 vrm.rs
+        target.set("ih", wink_l);
+        target.set("ee", wink_r);
+    }
 
     // COLONQ_TRACK_DEBUG=1：打印关键原始值；=2：连 14 个特征和 11 个权重一起打。
     // 只在前 3 个包和之后每 100 个包打，避免把日志刷爆。
@@ -528,8 +587,8 @@ fn parse_packet(
         log::info!(
             "面捕包 #{}: blink L/R={:.3}/{:.3} mouth_open={:+.3} quat=({:.3},{:.3},{:.3},{:.3})",
             counter,
-            left_blinking,
-            right_blinking,
+            open_left,
+            open_right,
             mouth_open,
             quat.0,
             quat.1,
@@ -1246,6 +1305,49 @@ mod tests {
             },
         );
         assert!(laugh.get("relaxed") > 0.5, "张嘴+笑意应眯眼: {:?}", laugh);
+    }
+
+    #[test]
+    fn wink_only_fires_for_one_eye() {
+        let off = ExprOptions::default();
+        // 双眼一起眨：blink 满、没有 wink
+        let (blink, wl, wr) = blink_and_wink(0.0, 0.0, &off);
+        assert!((blink - 1.0).abs() < 1e-6 && wl == 0.0 && wr == 0.0);
+
+        let on = ExprOptions {
+            wink: true,
+            ..ExprOptions::default()
+        };
+        // 双眼一起眨 → 只有 blink，不能被当成 wink
+        let (blink, wl, wr) = blink_and_wink(0.0, 0.0, &on);
+        assert!((blink - 1.0).abs() < 1e-6, "blink={}", blink);
+        assert_eq!((wl, wr), (0.0, 0.0));
+
+        // 只闭一只眼（左眼张开度 0，右眼 1）→ blink 归零、左眼 wink 拉满
+        let (blink, wl, wr) = blink_and_wink(1.0, 0.0, &on);
+        assert_eq!(blink, 0.0, "单眼闭不该触发双眼眨眼");
+        assert!((wl - 1.0).abs() < 1e-6, "wl={}", wl);
+        assert_eq!(wr, 0.0);
+
+        // 反方向
+        let (blink, wl, wr) = blink_and_wink(0.0, 1.0, &on);
+        assert_eq!((blink, wl), (0.0, 0.0));
+        assert!((wr - 1.0).abs() < 1e-6);
+
+        // 自然眨眼时两眼略有差异（0.2 的差）落在死区里 → 不算 wink
+        let (blink, wl, wr) = blink_and_wink(0.1, 0.3, &on);
+        assert!(blink > 0.6, "blink={}", blink);
+        assert_eq!((wl, wr), (0.0, 0.0), "0.2 的差应被死区吃掉");
+
+        // 左右对调
+        let sw = ExprOptions {
+            wink: true,
+            wink_swap: true,
+            ..ExprOptions::default()
+        };
+        let (_, wl, wr) = blink_and_wink(1.0, 0.0, &sw);
+        assert_eq!(wl, 0.0);
+        assert!((wr - 1.0).abs() < 1e-6);
     }
 
     #[test]

@@ -388,3 +388,40 @@ open = clamp01(mouth_open × COLONQ_MOUTH_GAIN) ^ COLONQ_MOUTH_CURVE
 
 这个 `open` 同时喂给 `aa`/`oh`/`ou`/`ee`/`ih` 五个口型，所以调它是改"整体嘴部灵敏度"；
 只想单独放大某个口型请用 `COLONQ_EXPR_GAINS="oh=1.3"`。
+
+### 单眼 wink
+
+VRM 1.0 里 `blink` / `blinkLeft` / `blinkRight` 是三个独立 preset，本模型对应
+target 13 / **15** / **14**（`Fcl_ALL_Blink_L/R` 一类）。wink 本质就是**只驱动其中一侧**，
+所以不能用原来那个"两眼平均"的 blink 信号。
+
+实现（`tracking.rs` 的 `blink_and_wink`）：
+
+```
+closed_l = 1 - eye_blink[1]      # eye_l 是关键点 42-47，即人的左眼
+closed_r = 1 - eye_blink[0]
+
+blink   = min(closed_l, closed_r)                 # 只有两只眼都闭才算"眨眼"
+wink_l  = ramp(closed_l - closed_r, 死区, 拉满)    # 只有一侧明显闭得多才算 wink
+wink_r  = ramp(closed_r - closed_l, 死区, 拉满)
+```
+
+三个关键设计：
+
+1. **单眼闭不能同时触发双眼 blink**，否则两只眼一起闭，wink 就看不出来了 ——
+   所以 `blink` 取两眼闭合度的**较小值**（关掉 wink 时仍用平均值，不改变既有手感）。
+2. **死区**（默认 0.25）：自然眨眼时两眼闭合度本来就有差异，全当 wink 会乱闪。
+3. **左右约定**：默认是镜像约定——你左眼眨，画面左边那只眼闭（看自己的 OBS 预览时最直观）。
+   模型/相机镜像导致反了就 `COLONQ_WINK_SWAP=1`。
+
+槽位怎么挤出来的：`ih` → `blinkLeft`、`ee` → `blinkRight`。这两个元音口型和
+`aa`/`oh` 高度重叠，牺牲它们对观感影响最小；开了 wink 之后 `COLONQ_EYE_LAUGH`
+的"眼珠变白"（target 23）也会让位（同一个 `ih` 槽）。想换别的分配就用
+`COLONQ_EXPR_MAP` 自己指定。
+
+验证（`COLONQ_WINK=1` + 只闭左眼的合成包）：
+
+```
+表情槽重映射: {"ee": "blinkRight", "ih": "blinkLeft"}
+回读: blink=0.00  ih=1.00   ← 双眼 blink 被正确抑制，左眼 wink 拉满
+```
