@@ -2,7 +2,7 @@
 name = "colonq"
 version = "0.1.0"
 authors = ["Studio Milkfat <contact@milkfat.studio>"]
-edition = "2018"
+edition = "2021"
 build = "build.rs"
 
 [profile.release]
