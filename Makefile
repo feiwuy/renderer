@@ -9,11 +9,11 @@
 CARGO ?= cargo
 export CARGO_HOME ?= $(CURDIR)/../.cargo-home
 
-.PHONY: check check-fast fmt clippy test viewer golden golden-update build clean
+.PHONY: check check-fast fmt clippy test viewer scripts golden golden-update build clean
 
-check: fmt clippy test viewer golden
+check: fmt clippy test viewer scripts golden
 
-check-fast: fmt clippy test viewer
+check-fast: fmt clippy test viewer scripts
 
 fmt:
 	@echo "== cargo fmt --check =="
@@ -26,6 +26,10 @@ clippy:
 test:
 	@echo "== cargo test =="
 	@$(CARGO) test --release --offline
+
+scripts:
+	@echo "== 启动脚本体检 =="
+	@sh tools/check-scripts.sh
 
 viewer:
 	@echo "== viewer 布局测试 =="
