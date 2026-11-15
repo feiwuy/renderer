@@ -420,6 +420,41 @@ COLONQ_SIZE=385x350 ./run-local.sh
 
 不设 `COLONQ_SERVE` 就不监听端口，服务只绑定 `127.0.0.1`。
 
+## OBS 里没画面怎么查（按这个顺序，30 秒定位）
+
+先分清是"渲染坏了"还是"OBS 没连上"，别重装 OBS、也别改代码：
+
+```bash
+# 1. 渲染器跑着的时候，另开一个终端
+python3 tools/check_visible.py
+```
+
+- `非空格子=47xx → 有内容，画面正常` ⇒ **渲染和推流都正常，问题在 OBS 侧**，看第 2 步
+- 连不上 / 非空格子接近 0 ⇒ 才是渲染侧的问题，看第 3 步
+
+```bash
+# 2. 看日志里到底有没有 OBS 的请求（UA 里带 "OBS"）
+grep -a "HTTP 请求" colonq.log
+grep -a "推流客户端" colonq.log
+```
+
+- **出现 `UA=...OBS...`** ⇒ OBS 连上了，问题在页面本身（缓存/前端），刷新页面 + 刷新浏览器缓存
+- **一条都没有** ⇒ OBS 的浏览器源没加载页面：右键源 → **刷新页面**；
+  源属性里**取消勾选「关闭源（当不可见时）」**（切场景后关掉、切回来不重连是最常见的原因）；
+  URL 用 `127.0.0.1` 而不是 `localhost`（服务已双栈监听，但排除变量）。
+  还可以把源 URL 临时改成 `https://example.com` 验证 OBS 的浏览器子系统本身是否工作。
+
+```bash
+# 3. 渲染侧确认：存一张 PNG 直接看
+COLONQ_DUMP_PNG=1 COLONQ_DUMP_AT=60 COLONQ_DUMP_EXIT=1 COLONQ_IDLE=1 \
+  ./target/release/colonq && ls -l frame64.png
+```
+
+排查要点（都是实际踩过的）：
+- `^C` 之后可能还有旧实例占着 8080，新实例会打 `推流服务启动失败` 并静默不出画面。用
+  `pgrep -af "target/release/colonq"` 确认只有一个进程。
+- OBS 客户端接入后推 1 帧就 `Broken pipe`，通常就是 `check_visible.py` 自己（它读一帧就退出）。
+
 ## 终端阻塞与 SDL 窗口交换是两个问题
 
 独立终端写线程解决的是 **PTY 背压**：终端来不及读时丢弃 ANSI 帧，不阻塞渲染。
