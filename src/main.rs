@@ -801,8 +801,39 @@ fn render_loop(
     }
 }
 
+/// 日志初始化：
+/// - 级别由 `COLONQ_LOG` 决定（debug/info/warn/error/off，默认 info）
+/// - 保留上一次运行的日志：simple_logging 每次启动都会清空 colonq.log，
+///   而"崩溃后重启"正是最需要看上一次日志的时候，所以超过 8 MB 的先滚成 colonq.log.1
+fn init_logging() {
+    const ROTATE_BYTES: u64 = 8 * 1024 * 1024;
+    if let Ok(meta) = std::fs::metadata("colonq.log") {
+        if meta.len() > ROTATE_BYTES {
+            let _ = std::fs::rename("colonq.log", "colonq.log.1");
+        }
+    }
+    let level = match std::env::var("COLONQ_LOG") {
+        Ok(raw) => match raw.trim().to_ascii_lowercase().as_str() {
+            "debug" | "trace" => log::LevelFilter::Debug,
+            "" | "info" => log::LevelFilter::Info,
+            "warn" | "warning" => log::LevelFilter::Warn,
+            "error" => log::LevelFilter::Error,
+            "off" | "none" => log::LevelFilter::Off,
+            other => {
+                eprintln!(
+                    "COLONQ_LOG={:?} 不认识（debug/info/warn/error/off），按 info 处理",
+                    other
+                );
+                log::LevelFilter::Info
+            }
+        },
+        Err(_) => log::LevelFilter::Info,
+    };
+    simple_logging::log_to_file("colonq.log", level).unwrap();
+}
+
 fn main() {
-    simple_logging::log_to_file("colonq.log", log::LevelFilter::Debug).unwrap();
+    init_logging();
     log_panics::init();
     // 先把所有生效的 COLONQ_* 打进日志：改完变量能一眼确认有没有传到（值非法会有 warn）
     utils::log_env_snapshot();

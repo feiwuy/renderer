@@ -90,6 +90,22 @@ python3 tools/vrm0_to_vrm1_min.py 你的模型.vrm assets/新名字.vrm
 
 **朝向是自动识别的**：脚本保留了旧的 `VRM` 扩展作为标记，`main.rs` 启动时会检查它 —— 带旧扩展的（0.x 转换件）朝向是 -Z，默认 `yaw=0`；原生 VRM 1.0 朝 +Z，默认 `yaw=180°`。手动覆盖仍然用 `COLONQ_YAW`。
 
+## 构建与检查
+
+需要 Rust **1.77+**（用了 C 字符串字面量 `c"..."`）。
+
+```bash
+make check        # fmt + clippy -D warnings + cargo test + viewer 测试 + 渲染基准
+make check-fast   # 跳过渲染基准（没有 GPU / 没放模型时用这个）
+make golden-update# 确认画面改动符合预期后，刷新渲染基准
+```
+
+- **渲染基准**（`tools/golden.sh`）：在 `COLONQ_IDLE=0` + 固定 GRID/MODEL 下渲染第 120 帧并比
+  sha256。基准值与**机器/驱动相关**，换机器或升级驱动后需要 `--update` 重建；缺模型或缺
+  GL 环境时会输出 SKIP 并返回 0，不会在无头环境误报。
+- **CI**：`.github/workflows/ci.yml` 跑上面除渲染基准外的全部检查，警告即失败。
+- 依赖版本已在 `Cargo.toml` 固定（不再是 `"*"`），升级时改版本号 + 跑 `make check`。
+
 ## 环境变量
 
 **开关类变量的统一取值**（`COLONQ_PARTS`、`COLONQ_IDLE`、`COLONQ_FIT`、`COLONQ_PROFILE`、`COLONQ_NO_MPV`、`COLONQ_DUMP_*` 等）：
@@ -131,6 +147,7 @@ python3 tools/vrm0_to_vrm1_min.py 你的模型.vrm assets/新名字.vrm
 | `COLONQ_CLIP` | `none` | 水平裁剪面：`chest`=胸口以上、数值=世界 Y、`none`=不裁 |
 | `COLONQ_MAX_JOINTS` | 自动（读模型骨骼数） | shader 里骨骼矩阵数组大小；NVIDIA 上限 256（1024 常量寄存器） |
 | `COLONQ_TEX_MAX` | `0`（不限制） | 贴图最长边上限，超过就降采样（`512` 可省一半内存） |
+| `COLONQ_LOG` | `info` | 日志级别：`debug`（排查用）/`info`/`warn`/`error`/`off`。`colonq.log` 超过 8 MB 时启动会先滚成 `colonq.log.1`，保留上一次运行的日志 |
 | `COLONQ_PROFILE` | 未设 | 每 60 帧输出一次分层耗时（avatar/blit/swap/终端）到日志 |
 | `COLONQ_BGCOLOR` | `000000`（run-obs 同） | 背景色（`RRGGBB` 或 `#RRGGBB`） |
 | `COLONQ_ASSETS` | `<crate>/assets` | 资源目录 |

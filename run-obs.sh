@@ -65,6 +65,7 @@ export COLONQ_TRACK_BIND="${COLONQ_TRACK_BIND:-0.0.0.0:11573}"
 # ---------- 动画与调试 ----------
 export COLONQ_IDLE="${COLONQ_IDLE:1}"             # 待机动画（面捕离线时的摆动）；0=关
 export COLONQ_TERM_EVERY="${COLONQ_TERM_EVERY:-1}" # 终端刷新间隔帧数（推流模式无影响）
+# export COLONQ_LOG=debug                         # 日志级别：debug/info/warn/error（默认 info）
 export COLONQ_SMOOTH="${COLONQ_SMOOTH:-0.5}"       # 面捕平滑系数（0~0.95，越大越平滑）
 # COLONQ_VIEW=head|face|bust|full                   # 取景预设（默认 head）
 # COLONQ_CAM="x,y,z" / COLONQ_LOOK="x,y,z"          # 手动相机/视线

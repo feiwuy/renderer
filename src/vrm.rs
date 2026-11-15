@@ -178,7 +178,7 @@ impl Scene {
                 b.push(item);
             }
 
-            log::info!(
+            log::debug!(
                 "attrib {}: length {}",
                 attrib,
                 (b.len() * accessor.dimensions().multiplicity() * accessor.data_type().size())
@@ -207,7 +207,7 @@ impl Scene {
         } else {
             let view = accessor.view().unwrap();
             let buf = bufs.get(view.buffer().index()).unwrap().0;
-            log::info!("attrib {}: length {}", attrib, view.length());
+            log::debug!("attrib {}: length {}", attrib, view.length());
             unsafe {
                 gl::BindBuffer(gl::ARRAY_BUFFER, buf);
                 gl::VertexAttribPointer(
@@ -390,7 +390,7 @@ impl Scene {
                 let primitives = m
                     .primitives()
                     .filter_map(|p| {
-                        log::info!("begin primitive");
+                        log::debug!("begin primitive");
                         let mode = match p.mode() {
                             gltf::mesh::Mode::Points => gl::POINTS,
                             gltf::mesh::Mode::Lines => gl::LINES,
@@ -553,7 +553,15 @@ impl Scene {
         let nodes = gltf
             .nodes()
             .map(|n| {
-                log::info!("node {} {:?}: {:?}", n.index(), n.name(), n.skin());
+                // 注意：这里以前是 `{:?}` 打印整棵 Skin（含整份 glTF 文档），
+                // 每个蒙皮节点一条、单条 220 KB，一次启动就能写出 1.3 MB 日志。
+                // 只保留有用信息：节点名 + 蒙皮索引。
+                log::debug!(
+                    "node {} {:?}: skin={:?}",
+                    n.index(),
+                    n.name(),
+                    n.skin().map(|s| s.index())
+                );
                 Node {
                     child_indices: n.children().map(|c| c.index()).collect(),
                     mesh_index: n.mesh().map(|m| m.index()),

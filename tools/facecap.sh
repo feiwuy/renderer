@@ -12,6 +12,8 @@
 #   --gaze-tracking 0     ← renderer 用不到凝视数据，关掉白赚 CPU
 #   --scan-every 10       ← 单人固定机位不必每 3 帧重新检测人脸
 #   --threads 0           ← 解码交给 OpenCV 自己安排线程（设 1 会拖低帧率）
+#
+# 输出同时写进 ~/facecap.log（可用 FACECAP_LOG 改路径），超过 5MB 自动滚成 .1
 set -u
 
 # ---------------- 可调参数 ----------------
@@ -39,13 +41,21 @@ sleep 1
 
 cd "$OSF" || { echo "找不到 $OSF" >&2; exit 1; }
 
+# 日志：同时打到终端和文件。facetracker 每 10 秒会打印一行源/输出帧率统计，
+# 风扇和延迟的问题基本都靠这几行判断。超过 5 MB 就滚动一份 .1（只留最近两份）。
+LOG="${FACECAP_LOG:-$HOME/facecap.log}"
+[ -f "$LOG" ] && [ "$(stat -c %s "$LOG" 2>/dev/null || echo 0)" -gt 5242880 ] && mv -f "$LOG" "$LOG.1"
+
 # 注意：这里是**一条**管道，两个 python 之间必须有 `|`。
 # 之前手动编辑时漏掉 `|` 会导致 facetracker 的参数被当成 mjpeg_to_raw 的参数。
-"$PY" mjpeg_to_raw.py \
-        --url "http://$PHONE_IP:4747/video" \
-        --width "$W" --height "$H" --fps "$FPS" --threads "$THREADS_DECODE" \
-  | "$PY" facetracker.py \
-        --raw-rgb 1 -W "$W" -H "$H" -F "$FPS" \
-        --faces 1 -m "$THREADS_INFER" --model "$MODEL" \
-        --gaze-tracking "$GAZE" --scan-every "$SCAN_EVERY" \
-        -i "$ARCH_IP" -p 11573 --silent 1
+{
+    echo "=== $(date '+%F %T') facecap 启动：${W}x${H}@${FPS} model=$MODEL 推理线程=$THREADS_INFER 解码线程=$THREADS_DECODE ==="
+    "$PY" mjpeg_to_raw.py \
+            --url "http://$PHONE_IP:4747/video" \
+            --width "$W" --height "$H" --fps "$FPS" --threads "$THREADS_DECODE" \
+      | "$PY" facetracker.py \
+            --raw-rgb 1 -W "$W" -H "$H" -F "$FPS" \
+            --faces 1 -m "$THREADS_INFER" --model "$MODEL" \
+            --gaze-tracking "$GAZE" --scan-every "$SCAN_EVERY" \
+            -i "$ARCH_IP" -p 11573 --silent 1
+} 2>&1 | tee -a "$LOG"
