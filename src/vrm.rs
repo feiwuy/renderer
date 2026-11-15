@@ -410,6 +410,8 @@ impl Scene {
                             let indices_buf = bufs.get(indices_view.buffer().index())?.0;
                             gl::BindBuffer(gl::ELEMENT_ARRAY_BUFFER, indices_buf);
 
+                            // 这个图元上成功挂上的表情顶点属性槽（仅用于日志）
+                            let mut bound: Vec<gl::types::GLuint> = Vec::new();
                             for (semantic, accessor) in p.attributes() {
                                 let mattrib = match semantic {
                                     gltf::Semantic::Positions => Some(utils::ATTRIB_VERTEX),
@@ -426,12 +428,32 @@ impl Scene {
 
                             for (expr, mesh, attrib) in expressions.values() {
                                 if m.index() == mesh.index() {
-                                    if let Some(target) = p.morph_targets().nth(expr.index as _) {
-                                        if let Some(pos) = target.positions() {
-                                            Self::initialize_attrib(*attrib, &pos, &bufs);
-                                        }
+                                    match p.morph_targets().nth(expr.index as _) {
+                                        Some(target) => match target.positions() {
+                                            Some(pos) => {
+                                                Self::initialize_attrib(*attrib, &pos, &bufs);
+                                                bound.push(*attrib);
+                                            }
+                                            None => log::debug!(
+                                                "表情 {} 在 mesh {} 图元里的 target {} 没有 POSITION 偏移",
+                                                expr.index, m.index(), expr.index
+                                            ),
+                                        },
+                                        None => log::debug!(
+                                            "mesh {} 的图元没有第 {} 个 morph target",
+                                            m.index(),
+                                            expr.index
+                                        ),
                                     }
                                 }
+                            }
+                            if !bound.is_empty() {
+                                log::debug!(
+                                    "mesh {} 图元: 绑定了 {} 个表情顶点属性 {:?}",
+                                    m.index(),
+                                    bound.len(),
+                                    bound
+                                );
                             }
 
                             // 取这个图元 POSITION 的 Y 范围，用于按高度剔除

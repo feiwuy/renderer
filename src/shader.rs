@@ -146,7 +146,7 @@ impl Shader {
                 );
             }
 
-            let uniform_expressions = ctx
+            let uniform_expressions: HashMap<String, gl::types::GLint> = ctx
                 .attrib_expressions
                 .keys()
                 .map(|enm| {
@@ -159,6 +159,22 @@ impl Shader {
                     )
                 })
                 .collect();
+
+            // 名字里带 expression_* 的 uniform 一旦查不到（-1），上传就是空操作，
+            // 画面看起来"表情完全没反应"。debug 级别打出来，便于排查这类静默失效。
+            let mut missing: Vec<&str> = Vec::new();
+            for (enm, loc) in &uniform_expressions {
+                if *loc < 0 {
+                    missing.push(enm);
+                }
+            }
+            log::debug!("表情 uniform 位置: {:?}", uniform_expressions);
+            if !missing.is_empty() {
+                log::warn!(
+                    "表情 {:?} 的 weight uniform 没找到（location=-1），这些表情不会生效",
+                    missing
+                );
+            }
 
             Self {
                 prog,

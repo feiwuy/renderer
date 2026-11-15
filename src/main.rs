@@ -342,8 +342,59 @@ fn render_loop(
     let mut last_profile = std::time::Instant::now();
     // 面捕动作幅度：旋转增益（越大头部转动越夸张）
     let track_gain = env_f32("COLONQ_TRACK_GAIN", 1.0);
-    // 面捕表情增益：blink / oh 权重放大
+    // 面捕表情增益：所有表情槽的总体放大倍数
     let expr_gain = env_f32("COLONQ_EXPR_GAIN", 1.0);
+
+    // 逐表情增益：COLONQ_EXPR_GAINS="happy=1.3,aa=0.8,sad=0"
+    // 一个总增益没法同时照顾 9 个表情（有的太夸张、有的太淡），所以再给每个槽单独一档。
+    let mut expr_gains = [1.0f32; tracking::EXPR_NAMES.len()];
+    if let Ok(spec) = std::env::var("COLONQ_EXPR_GAINS") {
+        for item in spec.split(',') {
+            let item = item.trim();
+            if item.is_empty() {
+                continue;
+            }
+            match item.split_once('=') {
+                Some((name, val)) => {
+                    match (tracking::expr_index(name.trim()), val.trim().parse::<f32>()) {
+                        (Some(i), Ok(v)) => expr_gains[i] = v.max(0.0),
+                        _ => log::warn!(
+                            "COLONQ_EXPR_GAINS 里的 {:?} 不认识（要用 名字=倍数，名字取自 {}）",
+                            item,
+                            tracking::EXPR_NAMES.join("/")
+                        ),
+                    }
+                }
+                None => log::warn!("COLONQ_EXPR_GAINS 里的 {:?} 不是 名字=倍数 形式", item),
+            }
+        }
+        log::info!("逐表情增益: {:?}", expr_gains);
+    }
+
+    // 表情槽 → uniform 位置的固定表（下标即 tracking::EXPR_NAMES 的槽位号）。
+    // 建一次就够：以前每帧都要在 HashMap 里做 11 次字符串查找。
+    let expr_slots: Vec<(usize, gl::types::GLint)> = {
+        let mut v: Vec<(usize, gl::types::GLint)> = tracking::EXPR_NAMES
+            .iter()
+            .enumerate()
+            .filter_map(|(i, name)| shader.uniform_expressions.get(*name).map(|loc| (i, *loc)))
+            .collect();
+        v.sort_by_key(|(i, _)| *i);
+        let bound: Vec<&str> = v.iter().map(|(i, _)| tracking::EXPR_NAMES[*i]).collect();
+        let missing: Vec<&str> = tracking::EXPR_NAMES
+            .iter()
+            .filter(|n| !shader.uniform_expressions.contains_key(**n))
+            .copied()
+            .collect();
+        log::info!("表情槽: 已绑定 {:?}", bound);
+        if !missing.is_empty() {
+            log::warn!(
+                "表情槽: {:?} 在当前模型里没有对应 morph target（该表情不会形变）",
+                missing
+            );
+        }
+        v
+    };
 
     // 颜色调参（都可以用环境变量覆盖）
     let c_exposure = env_f32("COLONQ_EXPOSURE", 0.85); // 整体亮度倍率
@@ -622,23 +673,44 @@ fn render_loop(
             } else {
                 0.0
             };
-            // 表情权重先一次性取快照：原来在循环里每个表情各锁一次（11 次/帧）
-            let expr_snapshot: Vec<f32> = {
+            // 表情权重：一次性取整份快照（固定数组，无哈希查找、无分配）
+            let expr_snapshot = {
                 let st = tracking_state.lock().unwrap();
-                shader
-                    .uniform_expressions
-                    .keys()
-                    .map(|name| *st.expression_weights.get(name).unwrap_or(&0.0))
-                    .collect()
+                st.expression_weights.0
             };
-            for ((enm, uniform), raw) in shader.uniform_expressions.iter().zip(expr_snapshot) {
-                let tracked = raw * expr_gain;
-                let w = if enm == "blink" {
-                    tracked.max(idle_blink)
-                } else {
-                    tracked
-                };
-                gl::Uniform1f(*uniform, w.clamp(0.0, 1.0));
+            let mut uploaded: Vec<(&str, f32)> = Vec::new();
+            for (idx, uniform) in expr_slots.iter() {
+                let name = tracking::EXPR_NAMES[*idx];
+                let mut w = expr_snapshot[*idx] * expr_gain * expr_gains[*idx];
+                // 待机眨眼只在面捕离线时生效；面捕在线时 blink 权重来自接收线程
+                if name == "blink" {
+                    w = w.max(idle_blink);
+                }
+                let w = w.clamp(0.0, 1.0);
+                gl::Uniform1f(*uniform, w);
+                uploaded.push((name, w));
+            }
+            // 前几帧把"上传了什么"和"GL 里实际存了什么"都打出来：
+            // 表情完全不动的两类原因（uniform 没生效 / 状态没传过来）能一眼分开。
+            if framecount <= 3 && log::log_enabled!(log::Level::Debug) {
+                let mut readback = [0f32; 1];
+                let check: Vec<String> = expr_slots
+                    .iter()
+                    .map(|(idx, loc)| {
+                        gl::GetUniformfv(shader.prog, *loc, readback.as_mut_ptr());
+                        format!(
+                            "{}={:.2}/{:.2}",
+                            tracking::EXPR_NAMES[*idx],
+                            uploaded
+                                .iter()
+                                .find(|(n, _)| *n == tracking::EXPR_NAMES[*idx])
+                                .map(|(_, w)| *w)
+                                .unwrap_or(-1.0),
+                            readback[0]
+                        )
+                    })
+                    .collect();
+                log::debug!("表情上传/回读: {}", check.join(" "));
             }
         }
         let ta = std::time::Instant::now();

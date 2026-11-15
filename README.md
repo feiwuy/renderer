@@ -122,9 +122,10 @@ VRM 模型 ──gltf 载入──> VAO/骨骼/表情属性
 | `| `COLONQ_FLIP` | `1` | 头部旋转补偿翻转：`0`=无、`1`=Z180°、`2`=Y180°、`3`=X180°、`4`=Z+Y、`5`=X+Y、`6`=X+Z |
 | `COLONQ_TRACK_BIND` | 程序 `127.0.0.1:11573`；`run-obs.sh` 为 `0.0.0.0:11573` | 面捕 UDP 绑定地址。**面捕跑在局域网另一台机器时必须是 `0.0.0.0:11573`**（否则一个字节都收不到），只有面捕和渲染同机时才用 `127.0.0.1:11573`；共享网络里请用防火墙只放行面捕机 IP |
 | `COLONQ_TRACK_GAIN` | `1` | 面捕头部旋转增益（>1 夸张动作，<1 减小） |
-| `COLONQ_EXPR_GAIN` | `1` | 眨眼/张嘴幅度增益 |
+| `COLONQ_EXPR_GAIN` | `1` | 全部表情权重的总增益 |
+| `COLONQ_EXPR_GAINS` | 未设 | **逐表情**增益，如 `happy=1.3,aa=0.8,sad=0`（`0` = 关掉这个表情）。名字取自 `happy angry sad relaxed surprised aa ih ou ee oh blink` |
+| `COLONQ_TRACK_DEBUG` | 未设 | `1` = 打印面上的原始值；`2` = 打印**全部 14 个面捕特征 + 11 个表情权重**（调表情曲线时用） |
 | `COLONQ_SMOOTH` | `0.5` | 面捕平滑 0~0.95（越大越平滑、延迟越高）。**延迟偏高时先降这个**：24 包/秒下 `0.5` ≈ 60 ms、`0.2` ≈ 26 ms、`0` = 不平滑。排查见 `FACE_CAPTURE.md` 第 9 节 |
-| `COLONQ_EXPR_GAIN` | `1` | 面捕表情权重增益（blink/oh 放大） |
 | `COLONQ_PBO` | 未设（=同步回读） | `1` 启用异步双 PBO 回读（真 GPU 上可省掉每帧等 GPU 画完的时间）；任何异常会自动退回同步，不会黑屏 |
 | `COLONQ_DUMP_PNG` | 未设 | 保存 `frame64.png`（原始）和 `frame-view.png`（字符比例视图） |
 | `COLONQ_DUMP_EXIT` | 未设 | 存完图立刻退出（`tools/golden.sh` 用它，省得靠 timeout 兜底） |
@@ -262,7 +263,8 @@ COLONQ_VSYNC=1 ./run-local.sh    # 打开垂直同步（会被绑到显示器刷
 1. 静态正脸对不对 → `COLONQ_ROT_OFFSET` 三轴偏移
 2. 点头方向 → `COLONQ_PITCH_FLIP`
 3. 摇头方向 → `COLONQ_QSIGN` 或 ROT_OFFSET yaw 偏移
-4. 幅度 → `COLONQ_TRACK_GAIN` / `COLONQ_EXPR_GAIN`
+4. 幅度 → `COLONQ_TRACK_GAIN` / `COLONQ_EXPR_GAIN` / `COLONQ_EXPR_GAINS=<表情>=<倍数>`
+5. 某个表情方向不对或太夸张 → `COLONQ_TRACK_DEBUG=2` 看 14 个特征的实际数值，再调 `tracking.rs` 的 `compute_weights` 或直接 `COLONQ_EXPR_GAINS="它=0"` 关掉
 
 ## 本地推流与 385×350 小窗口
 

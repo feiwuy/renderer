@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use byteorder::ByteOrder;
@@ -63,12 +62,256 @@ fn flip_quat(mode: u8) -> glam::Quat {
 // | confidence 68*4 | points 68*8 | pts_3d 70*12 | features 14*4
 const BLINK_OFFSET: usize = 20; // 两眼张开程度，0..1，越大越睁开
 const QUAT_OFFSET: usize = 33; // 头部姿态四元数 x,y,z,w
-const FEATURES_OFFSET: usize = 1729; // 14 个特征 f32 的起始
-                                     // features 顺序见 facetracker.py：eye_l, eye_r, eyebrow_*6, mouth_corner_*4, mouth_open, mouth_wide
-const FEATURE_MOUTH_OPEN: usize = FEATURES_OFFSET + 12 * 4; // = 1777
+
+/// 14 个特征 f32 的起始；顺序与 facetracker.py 的 `features` 列表完全一致，
+/// 1729 + 14*4 = 1785 = 整包长度，也就是说**每帧都在这 56 字节里送过来**。
+const FEATURES_OFFSET: usize = 1729;
+
+// 每个特征都是 OpenSeeFace 的 `Feature` 做自适应归一化之后的输出（见
+// deps/OpenSeeFace/tracker.py 的 Feature 类）：以**使用者自己的中位数**为 0 点，
+// 超出 min/max 时饱和到 ∓1，所以天然落在约 -1..1 且**正负代表方向**。
+const F_EYE_L: usize = FEATURES_OFFSET;
+const F_EYE_R: usize = FEATURES_OFFSET + 4;
+const F_BROW_STEEP_L: usize = FEATURES_OFFSET + 8;
+const F_BROW_UPDOWN_L: usize = FEATURES_OFFSET + 12;
+const F_BROW_QUIRK_L: usize = FEATURES_OFFSET + 16;
+const F_BROW_STEEP_R: usize = FEATURES_OFFSET + 20;
+const F_BROW_UPDOWN_R: usize = FEATURES_OFFSET + 24;
+const F_BROW_QUIRK_R: usize = FEATURES_OFFSET + 28;
+const F_MOUTH_CORNER_L: usize = FEATURES_OFFSET + 32;
+const F_MOUTH_INOUT_L: usize = FEATURES_OFFSET + 36;
+const F_MOUTH_CORNER_R: usize = FEATURES_OFFSET + 40;
+const F_MOUTH_INOUT_R: usize = FEATURES_OFFSET + 44;
+const F_MOUTH_OPEN: usize = FEATURES_OFFSET + 48;
+const F_MOUTH_WIDE: usize = FEATURES_OFFSET + 52;
+
+/// 表情槽位顺序 —— 必须与 `context.rs` 的 `attrib_expressions`（名字 → 顶点属性槽
+/// 5..15）以及 `assets/shader.vert` 里的 `expression_<名字>_weight` 一一对应。
+pub const EXPR_NAMES: [&str; 11] = [
+    "happy",
+    "angry",
+    "sad",
+    "relaxed",
+    "surprised",
+    "aa",
+    "ih",
+    "ou",
+    "ee",
+    "oh",
+    "blink",
+];
+
+/// 名字 → 槽位下标（不认识的名字返回 None，调用方跳过即可）
+pub fn expr_index(name: &str) -> Option<usize> {
+    EXPR_NAMES.iter().position(|n| *n == name)
+}
+
+/// 11 个表情槽的权重，按 `EXPR_NAMES` 顺序。
+///
+/// 以前是 `HashMap<String, f32>`：每收到一个包要做两次 `String` 分配、渲染循环里每帧
+/// 还要做 11 次字符串哈希。改成固定数组后这些都省了，而且编译期就能保证槽位对得上。
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ExprWeights(pub [f32; 11]);
+
+impl ExprWeights {
+    /// 按名字取值。主循环为了省哈希是直接下标访问的，这里是给测试和调试用的。
+    #[allow(dead_code)]
+    pub fn get(&self, name: &str) -> f32 {
+        expr_index(name).map(|i| self.0[i]).unwrap_or(0.0)
+    }
+
+    pub fn set(&mut self, name: &str, v: f32) {
+        if let Some(i) = expr_index(name) {
+            self.0[i] = v;
+        }
+    }
+}
+
+/// 一帧面捕里的 14 个几何特征（含义与符号见 `compute_weights`）
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RawFeatures {
+    pub eye_l: f32,
+    pub eye_r: f32,
+    pub brow_steep_l: f32,
+    pub brow_updown_l: f32,
+    pub brow_quirk_l: f32,
+    pub brow_steep_r: f32,
+    pub brow_updown_r: f32,
+    pub brow_quirk_r: f32,
+    pub mouth_corner_l: f32,
+    pub mouth_inout_l: f32,
+    pub mouth_corner_r: f32,
+    pub mouth_inout_r: f32,
+    pub mouth_open: f32,
+    pub mouth_wide: f32,
+}
+
+impl RawFeatures {
+    /// 从包里读出 14 个特征；任一不是有限数（3D 估计失败时会发 NaN）就返回 None
+    fn read(buf: &[u8]) -> Option<Self> {
+        let rd = |off: usize| byteorder::LittleEndian::read_f32(&buf[off..]);
+        let f = Self {
+            eye_l: rd(F_EYE_L),
+            eye_r: rd(F_EYE_R),
+            brow_steep_l: rd(F_BROW_STEEP_L),
+            brow_updown_l: rd(F_BROW_UPDOWN_L),
+            brow_quirk_l: rd(F_BROW_QUIRK_L),
+            brow_steep_r: rd(F_BROW_STEEP_R),
+            brow_updown_r: rd(F_BROW_UPDOWN_R),
+            brow_quirk_r: rd(F_BROW_QUIRK_R),
+            mouth_corner_l: rd(F_MOUTH_CORNER_L),
+            mouth_inout_l: rd(F_MOUTH_INOUT_L),
+            mouth_corner_r: rd(F_MOUTH_CORNER_R),
+            mouth_inout_r: rd(F_MOUTH_INOUT_R),
+            mouth_open: rd(F_MOUTH_OPEN),
+            mouth_wide: rd(F_MOUTH_WIDE),
+        };
+        let all_finite = [
+            f.eye_l,
+            f.eye_r,
+            f.brow_steep_l,
+            f.brow_updown_l,
+            f.brow_quirk_l,
+            f.brow_steep_r,
+            f.brow_updown_r,
+            f.brow_quirk_r,
+            f.mouth_corner_l,
+            f.mouth_inout_l,
+            f.mouth_corner_r,
+            f.mouth_inout_r,
+            f.mouth_open,
+            f.mouth_wide,
+        ]
+        .iter()
+        .all(|v| v.is_finite());
+        if all_finite {
+            Some(f)
+        } else {
+            None
+        }
+    }
+
+    /// 由眼特征算出的闭眼程度。注意包里 offset 20 的 `eye_blink[2]` 就是
+    /// facetracker 用 `1 - clamp(-eye_l/r)` 预算好的同一个量（同一个 Feature 实例），
+    /// 所以这里和那边读到的是同源同值——两路都取，等于给"到底有没有闭眼"加了个交叉校验。
+    fn blink_from_eyes(&self) -> f32 {
+        positive(-(self.eye_l + self.eye_r) * 0.5)
+    }
+}
+
+/// 夹到 0..1
+fn clamp01(v: f32) -> f32 {
+    if v.is_finite() {
+        v.clamp(0.0, 1.0)
+    } else {
+        0.0
+    }
+}
+
+/// 只取正向部分：`pos(x) = clamp(x, 0, 1)`
+fn positive(v: f32) -> f32 {
+    clamp01(v)
+}
+
+fn avg(a: f32, b: f32) -> f32 {
+    (a + b) * 0.5
+}
+
+/// 梯形窗：`x <= a` 为 0，`b..=c` 为 1，`x >= d` 为 0，两侧线性过渡。
+/// 用来把"张嘴程度"切成几档，各档对应不同的元音口型。
+fn trapezoid(x: f32, a: f32, b: f32, c: f32, d: f32) -> f32 {
+    if !x.is_finite() {
+        return 0.0;
+    }
+    if x <= a || x >= d {
+        0.0
+    } else if x < b {
+        (x - a) / (b - a)
+    } else if x <= c {
+        1.0
+    } else {
+        (d - x) / (d - c)
+    }
+}
+
+/// 14 个面捕特征 → 11 个表情槽权重。
+///
+/// 输入全部是相对使用者自身中位数的归一化量（约 -1..1，正负代表方向），
+/// 所以这里只做"分档 + 组合"，不需要标定绝对量。输出已夹在 0..1。
+///
+/// 映射表（每一项后面是它用到的特征）：
+///
+/// | 槽位        | 来源                                                      |
+/// |-------------|-----------------------------------------------------------|
+/// | `blink`     | `eye_l`/`eye_r`（+ 包里预算的 eye_blink，二者同源）        |
+/// | `surprised` | `eyebrow_updown_l/r` 抬眉（+ `eyebrow_quirk` 歪眉辅助）    |
+/// | `angry`     | `eyebrow_steepness_l/r` 内侧下压 + `eyebrow_updown` 压眉   |
+/// | `happy`     | `mouth_corner_updown_l/r` 大幅上扬                        |
+/// | `relaxed`   | 同一信号的小幅区间（小微笑 = 放松，大微笑才升级成 happy）  |
+/// | `sad`       | `mouth_corner_updown_l/r` 下垂 + `steepness` 内侧上挑(困り眉) |
+/// | `aa`        | `mouth_open` 大 + `mouth_wide` 宽（あ）                    |
+/// | `oh`        | `mouth_open` 大 + 嘴不宽（お）——**保留"张嘴就有 oh"的旧手感** |
+/// | `ou`        | 嘴比平时窄（嘟嘴）+ 少量张嘴（う）                        |
+/// | `ee`        | `mouth_open` 小 + `mouth_wide`/`mouth_corner_inout` 宽（え）|
+/// | `ih`        | `mouth_open` 中 + 宽（い）                                |
+///
+/// 系数都是第一版凭经验给的，不合手感可以用 `COLONQ_EXPR_GAINS` 单独调，
+/// 或者直接改这里（每个槽一行，注释写清了各自吃哪些特征）。
+pub fn compute_weights(f: &RawFeatures) -> ExprWeights {
+    // --- 眉毛：抬/压/内侧倾角/歪斜 ---
+    let brow_up = positive(avg(f.brow_updown_l, f.brow_updown_r));
+    let brow_down = positive(-avg(f.brow_updown_l, f.brow_updown_r));
+    let steep = avg(f.brow_steep_l, f.brow_steep_r); // 负 = 内侧下压（凶），正 = 内侧上挑（困）
+    let brow_tilt_in = positive(-steep);
+    let brow_tilt_up = positive(steep);
+    let quirk = positive(avg(f.brow_quirk_l, f.brow_quirk_r));
+
+    // --- 嘴角：上扬 / 下垂 ---
+    let corner_up = positive(avg(f.mouth_corner_l, f.mouth_corner_r));
+    let corner_down = positive(-avg(f.mouth_corner_l, f.mouth_corner_r));
+
+    // --- 嘴型：张口程度 + 横向宽度 ---
+    let open = positive(f.mouth_open);
+    let wide_raw = positive(f.mouth_wide);
+    let narrow = positive(-f.mouth_wide);
+    // 嘴角外拉也是"嘴宽"的另一个视角，权重给小一点
+    let inout = positive(avg(f.mouth_inout_l, f.mouth_inout_r));
+    let wide = clamp01(wide_raw * 0.75 + inout * 0.25);
+
+    // 嘴巴三档开合，用来区分元音口型
+    let open_low = trapezoid(open, 0.02, 0.10, 0.22, 0.40); // 微张
+    let open_mid = trapezoid(open, 0.18, 0.35, 0.55, 0.75); // 半张
+
+    let mut w = ExprWeights::default();
+    // 情绪组
+    w.set(
+        "surprised",
+        (brow_up * 1.0 + quirk * 0.15 + brow_tilt_up * 0.10).min(1.0),
+    );
+    w.set(
+        "angry",
+        (brow_tilt_in * 0.85 + brow_down * 0.35 + quirk * 0.20).min(1.0),
+    );
+    // 小微笑算"放松"，大幅上扬才算"开心"（两段梯形自然交叉，不会同时打满）
+    w.set("happy", trapezoid(corner_up, 0.30, 0.75, 2.0, 2.0));
+    w.set(
+        "relaxed",
+        trapezoid(corner_up, 0.05, 0.35, 0.50, 0.90) * (1.0 - wide * 0.3),
+    );
+    w.set("sad", (corner_down * 1.0 + brow_tilt_up * 0.30).min(1.0));
+
+    // 元音组（口型 = 张口程度 × 横向宽窄 的二维分布）
+    w.set("aa", (open * wide * 0.95).min(1.0));
+    w.set("oh", (open * (1.0 - 0.85 * wide)).min(1.0));
+    w.set("ou", (narrow * (0.35 + 0.65 * open) * 0.90).min(1.0));
+    w.set("ih", (open_mid * wide * 0.70).min(1.0));
+    w.set("ee", (open_low * wide * 0.60).min(1.0));
+    w
+}
 
 pub struct TrackingState {
-    pub expression_weights: HashMap<String, f32>,
+    /// 11 个表情槽的当前权重（按 `EXPR_NAMES` 顺序）
+    pub expression_weights: ExprWeights,
     pub orientation: glam::Quat,
     /// 最近一次收到有效面捕包的时间；None = 从未收到
     pub last_packet: Option<Instant>,
@@ -79,19 +322,7 @@ pub struct TrackingState {
 impl TrackingState {
     pub fn new() -> Self {
         Self {
-            expression_weights: HashMap::from([
-                ("happy".to_owned(), 0.0),
-                ("angry".to_owned(), 0.0),
-                ("sad".to_owned(), 0.0),
-                ("relaxed".to_owned(), 0.0),
-                ("surprised".to_owned(), 0.0),
-                ("aa".to_owned(), 0.0),
-                ("ih".to_owned(), 0.0),
-                ("ou".to_owned(), 0.0),
-                ("ee".to_owned(), 0.0),
-                ("oh".to_owned(), 0.0),
-                ("blink".to_owned(), 0.0),
-            ]),
+            expression_weights: ExprWeights::default(),
             orientation: glam::Quat::IDENTITY,
             last_packet: None,
             nominal_dt: 0.0,
@@ -112,7 +343,7 @@ impl TrackingState {
 fn parse_packet(
     buf: &[u8],
     sts: &SharedTrackingState,
-    diag: bool,
+    debug_level: u8,
     counter: u64,
     flip_mode: u8,
     offset_rad: (f32, f32, f32),
@@ -127,7 +358,11 @@ fn parse_packet(
     }
     let left_blinking = byteorder::LittleEndian::read_f32(&buf[BLINK_OFFSET..]);
     let right_blinking = byteorder::LittleEndian::read_f32(&buf[BLINK_OFFSET + 4..]);
-    let mouth_open = byteorder::LittleEndian::read_f32(&buf[FEATURE_MOUTH_OPEN..]);
+    // 包里 14 个特征（offset 1729 起）；不是有限数就当无效包
+    let Some(feats) = RawFeatures::read(buf) else {
+        return false;
+    };
+    let mouth_open = feats.mouth_open;
     let quat = (
         byteorder::LittleEndian::read_f32(&buf[QUAT_OFFSET..]),
         byteorder::LittleEndian::read_f32(&buf[QUAT_OFFSET + 4..]),
@@ -145,11 +380,20 @@ fn parse_packet(
     {
         return false;
     }
-    // COLONQ_TRACK_DEBUG=1：打印收到的原始数值（前 3 个包 + 之后每 100 个），
-    // 用来确认"包到底有没有到""数值合不合理"
-    if diag && (counter <= 3 || counter.is_multiple_of(100)) {
+    // 闭眼程度：先看包里 offset 20 那两个预算好的值，再和眼特征算出来的取较大者
+    // （二者同源同值，见 RawFeatures::blink_from_eyes），只为交叉校验。
+    let blink = (1.0 - (left_blinking + right_blinking) / 2.0)
+        .clamp(0.0, 1.0)
+        .max(feats.blink_from_eyes());
+    // 14 个特征 → 11 个表情槽（纯函数，不依赖历史值）
+    let mut target = compute_weights(&feats);
+    target.set("blink", blink);
+
+    // COLONQ_TRACK_DEBUG=1：打印关键原始值；=2：连 14 个特征和 11 个权重一起打。
+    // 只在前 3 个包和之后每 100 个包打，避免把日志刷爆。
+    if debug_level > 0 && (counter <= 3 || counter.is_multiple_of(100)) {
         log::info!(
-            "面捕包 #{}: blink L/R={:.3}/{:.3} mouth={:.3} quat=({:.3},{:.3},{:.3},{:.3})",
+            "面捕包 #{}: blink L/R={:.3}/{:.3} mouth_open={:+.3} quat=({:.3},{:.3},{:.3},{:.3})",
             counter,
             left_blinking,
             right_blinking,
@@ -159,6 +403,39 @@ fn parse_packet(
             quat.2,
             quat.3
         );
+        if debug_level >= 2 {
+            log::info!(
+                "  特征 眼={:+.2}/{:+.2} 眉(倾/抬/歪) 左={:+.2}/{:+.2}/{:+.2} 右={:+.2}/{:+.2}/{:+.2} 嘴角 上/拉 左={:+.2}/{:+.2} 右={:+.2}/{:+.2} 张嘴={:+.2} 嘴宽={:+.2}",
+                feats.eye_l,
+                feats.eye_r,
+                feats.brow_steep_l,
+                feats.brow_updown_l,
+                feats.brow_quirk_l,
+                feats.brow_steep_r,
+                feats.brow_updown_r,
+                feats.brow_quirk_r,
+                feats.mouth_corner_l,
+                feats.mouth_inout_l,
+                feats.mouth_corner_r,
+                feats.mouth_inout_r,
+                feats.mouth_open,
+                feats.mouth_wide
+            );
+            let pairs: Vec<String> = EXPR_NAMES
+                .iter()
+                .zip(target.0.iter())
+                .filter(|(_, w)| **w > 0.01)
+                .map(|(n, w)| format!("{}={:.2}", n, w))
+                .collect();
+            log::info!(
+                "  权重 {}",
+                if pairs.is_empty() {
+                    "（全部为 0 = 中性）".to_string()
+                } else {
+                    pairs.join(" ")
+                }
+            );
+        }
     }
     // 原始四元数的俯仰分量翻转（COLONQ_PITCH_SIGN=-1 修正低头/抬头反向）：
     // OpenSeeFace 的四元数 x 分量主要承载俯仰（pitch），取反即镜像俯仰方向
@@ -187,7 +464,6 @@ fn parse_packet(
         let (r, p, y) = new.to_euler(glam::EulerRot::YXZ);
         new = glam::Quat::from_euler(glam::EulerRot::YXZ, r, -p, y);
     }
-    let blink = (1.0 - (left_blinking + right_blinking) / 2.0).clamp(0.0, 1.0);
     let now = Instant::now();
     let mut state = sts.lock().unwrap();
     // 指数平滑：用上一次姿态与新姿态做球面插值（slerp），smooth 越大越平滑。
@@ -220,34 +496,34 @@ fn parse_packet(
                    1.0 / state.nominal_dt, state.nominal_dt * 1000.0, smooth, steady_alpha, tau_ms);
     }
     let smoothing = alpha < 1.0 && state.last_packet.is_some();
-    if smoothing {
-        let prev = state.orientation;
-        new = prev.slerp(new, alpha);
-    }
-    state.orientation = new;
-    // 权重平滑同样跳过首包
-    if smoothing {
-        let smooth_w = |prev: Option<&f32>, new_val: f32| -> f32 {
-            match prev {
-                Some(p) => p + (new_val - p) * alpha,
-                None => new_val,
-            }
-        };
-        let bw = smooth_w(state.expression_weights.get("blink"), blink);
-        let ow = smooth_w(
-            state.expression_weights.get("oh"),
-            mouth_open.clamp(0.0, 1.0),
-        );
-        state.expression_weights.insert("blink".to_owned(), bw);
-        state.expression_weights.insert("oh".to_owned(), ow);
+    // 首包不平滑（没有可依据的历史）；之后姿态走 slerp，权重走同一套 alpha 的线性插值
+    state.orientation = if smoothing {
+        state.orientation.slerp(new, alpha)
     } else {
-        state.expression_weights.insert("blink".to_owned(), blink);
-        state
-            .expression_weights
-            .insert("oh".to_owned(), mouth_open.clamp(0.0, 1.0));
+        new
+    };
+    if smoothing {
+        for (cur, tgt) in state.expression_weights.0.iter_mut().zip(target.0.iter()) {
+            *cur += (*tgt - *cur) * alpha;
+        }
+    } else {
+        state.expression_weights = target;
     }
     state.last_packet = Some(now);
     true
+}
+
+/// `COLONQ_TRACK_DEBUG` 的调试等级：
+/// `0/未设置` = 安静；`1` = 打印关键原始值；`2`+ = 连 14 个特征和 11 个表情权重一起打。
+/// `true/on/yes` 这类开关写法按 1 处理（保持和 `env_flag` 一致的直觉）。
+fn track_debug_level() -> u8 {
+    match std::env::var("COLONQ_TRACK_DEBUG") {
+        Err(_) => 0,
+        Ok(raw) => match raw.trim().to_ascii_lowercase().as_str() {
+            "" | "0" | "false" | "off" | "no" => 0,
+            t => t.parse::<u8>().unwrap_or(1),
+        },
+    }
 }
 
 /// 启动 UDP 接收线程，返回绑定的本地地址（供测试/日志）
@@ -267,7 +543,12 @@ pub fn start_receiver(
         log::info!("面捕平滑: 系数 {}（越大越平滑，延迟越高）", smooth);
     }
     std::thread::spawn(move || {
-        let diag = utils::env_flag("COLONQ_TRACK_DEBUG", false);
+        let debug_level = track_debug_level();
+        if debug_level >= 2 {
+            log::info!(
+                "面捕调试等级 2：每个采样点打印 14 个特征 + 11 个表情权重（日志会明显变多）"
+            );
+        }
         let flip_mode: u8 = utils::env_parse("COLONQ_FLIP").unwrap_or(1);
         let offset_rad = utils::env_csv3("COLONQ_ROT_OFFSET")
             .map(|(x, y, z)| (x.to_radians(), y.to_radians(), z.to_radians()))
@@ -287,7 +568,7 @@ pub fn start_receiver(
                     if !parse_packet(
                         &buf[..len],
                         &sts,
-                        diag,
+                        debug_level,
                         counter,
                         flip_mode,
                         offset_rad,
@@ -342,7 +623,7 @@ mod tests {
         put(&mut packet, QUAT_OFFSET + 4, quat[1]);
         put(&mut packet, QUAT_OFFSET + 8, quat[2]);
         put(&mut packet, QUAT_OFFSET + 12, quat[3]);
-        put(&mut packet, FEATURE_MOUTH_OPEN, mouth_open);
+        put(&mut packet, F_MOUTH_OPEN, mouth_open);
         packet
     }
 
@@ -357,6 +638,26 @@ mod tests {
         }
     }
 
+    /// 按 facetracker.py 的 features 顺序写 14 个特征（偏移见 FEATURES_OFFSET），
+    /// 并把四元数设为单位、eye_blink 设为"睁眼"，让包本身是有效的。
+    fn make_feature_packet(f: &[f32; 14]) -> Vec<u8> {
+        let mut packet = vec![0u8; PACKET_LEN];
+        for (i, v) in f.iter().enumerate() {
+            byteorder::LittleEndian::write_f32(&mut packet[FEATURES_OFFSET + i * 4..], *v);
+        }
+        byteorder::LittleEndian::write_f32(&mut packet[QUAT_OFFSET + 12..], 1.0);
+        byteorder::LittleEndian::write_f32(&mut packet[BLINK_OFFSET..], 1.0);
+        byteorder::LittleEndian::write_f32(&mut packet[BLINK_OFFSET + 4..], 1.0);
+        packet
+    }
+
+    /// 特征数组 → 表情权重（跳过网络，直接测映射函数）
+    fn weights_from(f: [f32; 14]) -> ExprWeights {
+        let packet = make_feature_packet(&f);
+        let raw = RawFeatures::read(&packet).expect("14 个特征应可解析");
+        compute_weights(&raw)
+    }
+
     #[test]
     fn valid_packet_updates_state_with_correct_offsets() {
         let sts = std::sync::Arc::new(std::sync::Mutex::new(TrackingState::new()));
@@ -367,10 +668,10 @@ mod tests {
             .unwrap();
         wait_tracking(&sts);
         let s = sts.lock().unwrap();
-        assert_eq!(s.expression_weights["blink"], 0.5);
-        assert_eq!(s.expression_weights["oh"], 0.42);
+        assert_eq!(s.expression_weights.get("blink"), 0.5);
+        assert_eq!(s.expression_weights.get("oh"), 0.42);
         assert!(s.tracking_active());
-        assert_ne!(s.expression_weights["oh"], 10.25);
+        assert_ne!(s.expression_weights.get("oh"), 10.25);
     }
 
     #[test]
@@ -387,7 +688,8 @@ mod tests {
         wait_tracking(&sts);
         let orientation = sts.lock().unwrap().orientation;
         // 档3（calibrate_rotation.py）实测让头部回正：接收器对单位四元数的输出即中性姿态
-        let expected = glam::Quat::from_xyzw(-0.7071068, -0.7071068, -3.0908623e-8, 3.0908623e-8);
+        let h = std::f32::consts::FRAC_1_SQRT_2;
+        let expected = glam::Quat::from_xyzw(-h, -h, -3.0908623e-8, 3.0908623e-8);
         assert!(
             (orientation.dot(expected) - 1.0).abs() < 1e-4,
             "orientation={:?} expected={:?}",
@@ -441,7 +743,7 @@ mod tests {
             .send_to(&make_packet(0.0, 0.0, [0.0, 0.0, 0.0, 1.0], 0.9), addr)
             .unwrap();
         wait_tracking(&sts);
-        assert_eq!(sts.lock().unwrap().expression_weights["oh"], 0.9);
+        assert_eq!(sts.lock().unwrap().expression_weights.get("oh"), 0.9);
     }
 
     #[test]
@@ -453,6 +755,182 @@ mod tests {
             .send_to(&make_packet(0.0, 0.0, [0.0, 0.0, 0.0, 1.0], 5.0), addr)
             .unwrap();
         wait_tracking(&sts);
-        assert_eq!(sts.lock().unwrap().expression_weights["oh"], 1.0);
+        assert_eq!(sts.lock().unwrap().expression_weights.get("oh"), 1.0);
+    }
+
+    // ---- 14 个特征 → 11 个表情槽的映射 ----
+    // 特征下标顺序即 facetracker.py 的 features 列表：
+    // 0 eye_l, 1 eye_r, 2 brow_steep_l, 3 brow_updown_l, 4 brow_quirk_l,
+    // 5 brow_steep_r, 6 brow_updown_r, 7 brow_quirk_r,
+    // 8 corner_l, 9 inout_l, 10 corner_r, 11 inout_r, 12 open, 13 wide
+
+    #[test]
+    fn feature_offsets_follow_facetracker_order() {
+        // 用 1..14 这种可区分的值，任何一个偏移写错都会立刻对不上
+        let vals = [
+            1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0,
+        ];
+        let f = RawFeatures::read(&make_feature_packet(&vals)).unwrap();
+        assert_eq!((f.eye_l, f.eye_r), (1.0, 2.0));
+        assert_eq!(
+            (f.brow_steep_l, f.brow_updown_l, f.brow_quirk_l),
+            (3.0, 4.0, 5.0)
+        );
+        assert_eq!(
+            (f.brow_steep_r, f.brow_updown_r, f.brow_quirk_r),
+            (6.0, 7.0, 8.0)
+        );
+        assert_eq!((f.mouth_corner_l, f.mouth_inout_l), (9.0, 10.0));
+        assert_eq!((f.mouth_corner_r, f.mouth_inout_r), (11.0, 12.0));
+        assert_eq!((f.mouth_open, f.mouth_wide), (13.0, 14.0));
+        // 14 个特征正好占满包的尾部：1729 + 14*4 == 1785
+        assert_eq!(FEATURES_OFFSET + 14 * 4, PACKET_LEN);
+    }
+
+    #[test]
+    fn nan_feature_invalidates_packet() {
+        let mut vals = [0.0f32; 14];
+        vals[13] = f32::NAN;
+        assert!(
+            RawFeatures::read(&make_feature_packet(&vals)).is_none(),
+            "特征里有 NaN 应判为无效包"
+        );
+    }
+
+    #[test]
+    fn neutral_face_produces_no_expression() {
+        let w = weights_from([0.0; 14]);
+        for (i, v) in w.0.iter().enumerate() {
+            assert_eq!(*v, 0.0, "中性脸时 {} 应为 0，实际 {}", EXPR_NAMES[i], v);
+        }
+    }
+
+    #[test]
+    fn raised_brows_are_surprised_and_tilted_in_brows_are_angry() {
+        let mut f = [0.0f32; 14];
+        f[3] = 0.8; // 左侧眉抬
+        f[6] = 0.8; // 右侧眉抬
+        let w = weights_from(f);
+        assert!(w.get("surprised") > 0.6, "{:?}", w);
+        assert_eq!(w.get("angry"), 0.0);
+
+        let mut f = [0.0f32; 14];
+        f[2] = -0.8; // 左侧眉内侧下压
+        f[5] = -0.8; // 右侧眉内侧下压
+        let w = weights_from(f);
+        assert!(w.get("angry") > 0.5, "{:?}", w);
+        assert_eq!(w.get("surprised"), 0.0);
+    }
+
+    #[test]
+    fn small_smile_is_relaxed_and_big_smile_is_happy() {
+        let mut small = [0.0f32; 14];
+        small[8] = 0.30;
+        small[10] = 0.30;
+        let small = weights_from(small);
+        assert!(
+            small.get("relaxed") > 0.5,
+            "小微笑应偏 relaxed: {:?}",
+            small
+        );
+        assert!(
+            small.get("happy") < 0.2,
+            "小微笑不该把 happy 打满: {:?}",
+            small
+        );
+
+        let mut big = [0.0f32; 14];
+        big[8] = 1.0;
+        big[10] = 1.0;
+        let big = weights_from(big);
+        assert!(big.get("happy") > 0.9, "大笑容应给 happy: {:?}", big);
+        assert!(
+            big.get("relaxed") < 0.3,
+            "大笑容不该还留 relaxed: {:?}",
+            big
+        );
+    }
+
+    #[test]
+    fn mouth_corner_down_is_sad() {
+        let mut f = [0.0f32; 14];
+        f[8] = -0.7;
+        f[10] = -0.7;
+        assert!(weights_from(f).get("sad") > 0.6);
+    }
+
+    #[test]
+    fn vowel_shape_follows_open_and_wide() {
+        // 张大 + 嘴宽 → あ
+        let mut f = [0.0f32; 14];
+        f[12] = 0.9;
+        f[13] = 0.8;
+        let aa = weights_from(f);
+        assert!(aa.get("aa") > 0.5, "{:?}", aa);
+        assert!(
+            aa.get("aa") > aa.get("oh"),
+            "张开且宽应是 aa 而不是 oh: {:?}",
+            aa
+        );
+
+        // 张大 + 嘴不宽 → お（保留"只要张嘴就有 oh"的旧手感）
+        let mut f = [0.0f32; 14];
+        f[12] = 0.9;
+        let oh = weights_from(f);
+        assert!(oh.get("oh") > 0.8, "{:?}", oh);
+        assert_eq!(oh.get("aa"), 0.0);
+
+        // 比平时窄（嘟嘴）→ う
+        let mut f = [0.0f32; 14];
+        f[13] = -0.8;
+        assert!(weights_from(f).get("ou") > 0.2);
+
+        // 微张 + 嘴宽 → え / い
+        let mut f = [0.0f32; 14];
+        f[12] = 0.15;
+        f[13] = 0.9;
+        let ee = weights_from(f);
+        assert!(ee.get("ee") > 0.2, "{:?}", ee);
+    }
+
+    #[test]
+    fn weights_always_stay_within_zero_and_one() {
+        // 线性同余伪随机，覆盖 [-1, 1] 全区间（包括超出特征正常范围的极端值）
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((seed >> 33) as f32 / (1u64 << 31) as f32) * 2.0 - 1.0
+        };
+        for _ in 0..2000 {
+            let mut f = [0.0f32; 14];
+            for v in f.iter_mut() {
+                *v = next() * 1.5; // 故意越界，验证夹取
+            }
+            let w = weights_from(f);
+            for (i, v) in w.0.iter().enumerate() {
+                assert!(
+                    v.is_finite() && (0.0..=1.0).contains(v),
+                    "{} 越界: {}",
+                    EXPR_NAMES[i],
+                    v
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_slot_name_is_unique_and_looked_up() {
+        for (i, name) in EXPR_NAMES.iter().enumerate() {
+            assert_eq!(expr_index(name), Some(i));
+            assert_eq!(
+                EXPR_NAMES.iter().filter(|n| *n == name).count(),
+                1,
+                "槽位名重复: {}",
+                name
+            );
+        }
+        assert_eq!(expr_index("不存在的表情"), None);
     }
 }
