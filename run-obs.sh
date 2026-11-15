@@ -22,6 +22,15 @@ export COLONQ_NO_TERM=1                            # 不向终端输出 ANSI（�
 export COLONQ_PREVIEW=0                            # 隐藏 SDL 预览窗口（推流不依赖可见窗口）
 export COLONQ_SIZE="${COLONQ_SIZE:-385x350}"       # 终端像素尺寸提示（OBS 源为 385×350）
 
+# ---------- 取景 ----------
+# 默认 head（头部 + 肩胸，即"整个人"的常用取景）；要半身/全身/特写就显式覆盖：
+#   COLONQ_VIEW=bust ./run-obs.sh    # 半身（自动开胸部裁剪）
+#   COLONQ_VIEW=full ./run-obs.sh    # 全身
+#   COLONQ_VIEW=face ./run-obs.sh    # 面部特写
+# 注意：fish 里 `set -x COLONQ_VIEW face` 是**会话级**的，会一直覆盖这里的默认值；
+# 想恢复正常用 `set -e COLONQ_VIEW`。启动日志的「取景: …」一行就是当前生效值。
+export COLONQ_VIEW="${COLONQ_VIEW:-head}"
+
 # ---------- 显示 ----------
 export COLONQ_PROFILE="${COLONQ_PROFILE:-1}"       # 每60帧输出分层耗时到日志
 export COLONQ_BGCOLOR="${COLONQ_BGCOLOR:-000000}"  # 背景色（RRGGBB）；ffffff=白
