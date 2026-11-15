@@ -1,4 +1,4 @@
 # 渲染基准：COLONQ_IDLE=0 / FPS 不限 / DUMP_AT=120 / GRID=128x64 / MODEL=my_avatar.vrm
 # 渲染结果与显卡/驱动相关；换机器或升级驱动后需要 sh tools/golden.sh --update 重建
-gl: llvmpipe (LLVM 23.1.4, 256 bits)
-sha: 00faccb2a281d723ab7ed1ed148df9ebeb538e7b59c68f42737e286199827ab1
+gl: AMD Radeon 780M Graphics (radeonsi, phoenix, ACO, DRM 3.64, 7.3.4-zen2-1-zen)
+sha: fe4c52894ebb1c26ebbb05994b96e84c8cbdf82956dc4aa7876a45ad278e4c5e
