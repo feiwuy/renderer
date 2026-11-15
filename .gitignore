@@ -9,6 +9,9 @@ oneframe.txt
 /*.png
 /*.gif
 
+# morph target 联系表（tools/morph_sheet.sh 产物）
+/tests/morph-sheet/
+
 # 本地校验产物与日志
 *.log
 /validation-*/

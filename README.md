@@ -125,6 +125,11 @@ VRM 模型 ──gltf 载入──> VAO/骨骼/表情属性
 | `COLONQ_EXPR_GAIN` | `1` | 全部表情权重的总增益 |
 | `COLONQ_EXPR_GAINS` | 未设 | **逐表情**增益，如 `happy=1.3,aa=0.8,sad=0`（`0` = 关掉这个表情）。名字取自 `happy angry sad relaxed surprised aa ih ou ee oh blink` |
 | `COLONQ_TRACK_DEBUG` | 未设 | `1` = 打印面上的原始值；`2` = 打印**全部 14 个面捕特征 + 11 个表情权重**（调表情曲线时用） |
+| `COLONQ_MOUTH_OVERRIDE` | `0.7` | 笑的时候元音口型让出多少（0~1）。`happy` 的形变自己就会把嘴拉开，再叠 oh/aa 会变成血盆大口；`0` = 不干预 |
+| `COLONQ_OPEN_VS_SMILE` | `0.45` | 张嘴时把"嘴角上扬"信号扣掉多少，避免"一张嘴就在笑" |
+| `COLONQ_EYE_SURPRISE` | `0.55` | 眼睛睁大对"惊讶"的贡献（抬眉不灵敏时的第二路信号），`0` = 只用眉毛 |
+| `COLONQ_EXPR_MAP` | 未设 | **槽位重映射**，如 `relaxed=blinkLeft`（单眼 wink）或 `ih=23`（换成一个没名字的 morph target）。顶点属性槽只有 11 个，想用模型里其余表情只能这样"换" |
+| `COLONQ_EXPR_FORCE` | 未设 | 把槽位钉死在固定权重、忽略面捕，如 `surprised=1`（**不夹取**，可以写 `2` 放大）。用来确认"这个表情在我的模型上到底长什么样" |
 | `COLONQ_SMOOTH` | `0.5` | 面捕平滑 0~0.95（越大越平滑、延迟越高）。**延迟偏高时先降这个**：24 包/秒下 `0.5` ≈ 60 ms、`0.2` ≈ 26 ms、`0` = 不平滑。排查见 `FACE_CAPTURE.md` 第 9 节 |
 | `COLONQ_PBO` | 未设（=同步回读） | `1` 启用异步双 PBO 回读（真 GPU 上可省掉每帧等 GPU 画完的时间）；任何异常会自动退回同步，不会黑屏 |
 | `COLONQ_DUMP_PNG` | 未设 | 保存 `frame64.png`（原始）和 `frame-view.png`（字符比例视图） |

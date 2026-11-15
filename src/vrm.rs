@@ -79,6 +79,36 @@ pub struct Scene {
     pub scene_node_indices: Vec<usize>,
 }
 
+/// 解析 `COLONQ_EXPR_MAP="relaxed=blinkLeft,ih=44"`：槽位名 → 目标（preset 名或 morph 下标）
+fn expr_map_overrides() -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    let Ok(spec) = std::env::var("COLONQ_EXPR_MAP") else {
+        return out;
+    };
+    for item in spec.split(',') {
+        let item = item.trim();
+        if item.is_empty() {
+            continue;
+        }
+        match item.split_once('=') {
+            Some((slot, want)) => {
+                let (slot, want) = (slot.trim(), want.trim());
+                if crate::tracking::expr_index(slot).is_none() {
+                    log::warn!(
+                        "COLONQ_EXPR_MAP 里的槽位 {:?} 不存在（可选: {}）",
+                        slot,
+                        crate::tracking::EXPR_NAMES.join("/")
+                    );
+                } else {
+                    out.insert(slot.to_string(), want.to_string());
+                }
+            }
+            None => log::warn!("COLONQ_EXPR_MAP 里的 {:?} 不是 槽位=目标 形式", item),
+        }
+    }
+    out
+}
+
 /// 探测"胸部"的世界 Y 坐标：优先按骨骼名找 chest / upperChest / spine，找不到就退化成身高的 65%
 pub fn detect_chest_y(path: &str) -> f32 {
     let data = match std::fs::read(path) {
@@ -243,22 +273,49 @@ impl Scene {
         }
         log::info!("max: {}", max);
 
+        // 槽位重映射：COLONQ_EXPR_MAP="relaxed=blinkLeft,ih=44"
+        //   等号左边是 shader 里的槽位名（happy/angry/sad/relaxed/surprised/aa/ih/ou/ee/oh/blink），
+        //   右边可以是 VRM preset 名（含 blinkLeft / blinkRight / neutral / custom），
+        //   也可以是**morph target 下标**（数字，指脸 mesh 的第 N 个 target）。
+        //   用途：顶点属性槽只有 11 个且已经用满，靠重映射才能用上模型里其余的表情
+        //   （比如把用不上的 relaxed 换成 blinkLeft 做单眼 wink，或换成那 13 个无名 target）。
+        let overrides = expr_map_overrides();
+        if !overrides.is_empty() {
+            log::info!("表情槽重映射: {:?}", overrides);
+        }
+        // 数字下标要用到的"脸节点"：取任意一个 preset 绑定的 node（本项目的卡通脸只有一个）
+        let face_node = vrm
+            .expressions
+            .preset
+            .values()
+            .filter_map(|p| p.morph_target_binds.first().map(|b| b.node))
+            .next();
+
         // 只挂载模型里真实存在的表情；缺失的就不绑属性（对应 uniform 位置为 -1，上传时自动失效）
-        let expressions: HashMap<
-            String,
-            (
-                gltf::json::extensions::root::MorphTargetBind,
-                gltf::Mesh,
-                gl::types::GLuint,
-            ),
-        > = ctx
+        let expressions: HashMap<String, (u32, gltf::Mesh, gl::types::GLuint)> = ctx
             .attrib_expressions
             .iter()
-            .filter_map(|(enm, attrib)| {
-                let preset = vrm.expressions.preset.get(enm)?;
-                let expr = preset.morph_target_binds.first()?.clone();
-                let mesh = gltf.nodes().nth(expr.node as _)?.mesh()?;
-                Some((enm.clone(), (expr, mesh, *attrib)))
+            .filter_map(|(slot, attrib)| {
+                let want = overrides.get(slot).map(|s| s.as_str()).unwrap_or(slot);
+                let (node, index) = if let Some(preset) = vrm.expressions.preset.get(want) {
+                    let b = preset.morph_target_binds.first()?;
+                    (b.node, b.index)
+                } else if let Ok(idx) = want.parse::<u32>() {
+                    (face_node?, idx)
+                } else {
+                    log::warn!(
+                        "表情槽 {} 指向 {:?}：既不是 VRM preset 名，也不是 morph target 下标",
+                        slot,
+                        want
+                    );
+                    return None;
+                };
+                let mesh = gltf.nodes().nth(node as _)?.mesh()?;
+                if *attrib > 15 {
+                    log::warn!("表情槽 {} 的属性位置 {} 超出 0..15，已跳过", slot, attrib);
+                    return None;
+                }
+                Some((slot.clone(), (index, mesh, *attrib)))
             })
             .collect();
         for missing in ctx
@@ -426,23 +483,24 @@ impl Scene {
                                 }
                             }
 
-                            for (expr, mesh, attrib) in expressions.values() {
+                            for (target_index, mesh, attrib) in expressions.values() {
                                 if m.index() == mesh.index() {
-                                    match p.morph_targets().nth(expr.index as _) {
+                                    match p.morph_targets().nth(*target_index as _) {
                                         Some(target) => match target.positions() {
                                             Some(pos) => {
                                                 Self::initialize_attrib(*attrib, &pos, &bufs);
                                                 bound.push(*attrib);
                                             }
                                             None => log::debug!(
-                                                "表情 {} 在 mesh {} 图元里的 target {} 没有 POSITION 偏移",
-                                                expr.index, m.index(), expr.index
+                                                "mesh {} 图元里的 target {} 没有 POSITION 偏移",
+                                                m.index(),
+                                                target_index
                                             ),
                                         },
                                         None => log::debug!(
                                             "mesh {} 的图元没有第 {} 个 morph target",
                                             m.index(),
-                                            expr.index
+                                            target_index
                                         ),
                                     }
                                 }

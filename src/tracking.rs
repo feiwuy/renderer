@@ -234,6 +234,45 @@ fn trapezoid(x: f32, a: f32, b: f32, c: f32, d: f32) -> f32 {
     }
 }
 
+/// 表情映射的可调参数（启动时从环境变量读一次，之后每条包都按它算）
+#[derive(Clone, Copy, Debug)]
+pub struct ExprOptions {
+    /// 笑的时候元音组让出多少嘴部形变（0~1）。
+    /// VRM 的 happy morph 本身就把嘴拉开了，再叠 oh/aa 会变成"血盆大口"——
+    /// 这就是"大笑和张嘴绑在一起"的来源。默认 0.7 表示笑到满时元音口型只剩 30%。
+    pub mouth_override: f32,
+    /// 眼睛睁大对"惊讶"的贡献（抬眉看不出来时，睁大眼睛是第二个信号）
+    pub eye_surprise: f32,
+    /// 张嘴时把"嘴角上扬"信号扣掉多少（乘以张口程度）。张嘴会让上唇抬高，容易被误判成笑。
+    pub open_vs_smile: f32,
+}
+
+impl Default for ExprOptions {
+    fn default() -> Self {
+        Self {
+            mouth_override: 0.7,
+            eye_surprise: 0.55,
+            open_vs_smile: 0.45,
+        }
+    }
+}
+
+impl ExprOptions {
+    pub fn from_env() -> Self {
+        let d = Self::default();
+        let read = |name: &str, fallback: f32| {
+            utils::env_parse::<f32>(name)
+                .map(|v| v.clamp(0.0, 2.0))
+                .unwrap_or(fallback)
+        };
+        Self {
+            mouth_override: read("COLONQ_MOUTH_OVERRIDE", d.mouth_override),
+            eye_surprise: read("COLONQ_EYE_SURPRISE", d.eye_surprise),
+            open_vs_smile: read("COLONQ_OPEN_VS_SMILE", d.open_vs_smile),
+        }
+    }
+}
+
 /// 14 个面捕特征 → 11 个表情槽权重。
 ///
 /// 输入全部是相对使用者自身中位数的归一化量（约 -1..1，正负代表方向），
@@ -257,7 +296,7 @@ fn trapezoid(x: f32, a: f32, b: f32, c: f32, d: f32) -> f32 {
 ///
 /// 系数都是第一版凭经验给的，不合手感可以用 `COLONQ_EXPR_GAINS` 单独调，
 /// 或者直接改这里（每个槽一行，注释写清了各自吃哪些特征）。
-pub fn compute_weights(f: &RawFeatures) -> ExprWeights {
+pub fn compute_weights(f: &RawFeatures, opts: &ExprOptions) -> ExprWeights {
     // --- 眉毛：抬/压/内侧倾角/歪斜 ---
     let brow_up = positive(avg(f.brow_updown_l, f.brow_updown_r));
     let brow_down = positive(-avg(f.brow_updown_l, f.brow_updown_r));
@@ -266,12 +305,18 @@ pub fn compute_weights(f: &RawFeatures) -> ExprWeights {
     let brow_tilt_up = positive(steep);
     let quirk = positive(avg(f.brow_quirk_l, f.brow_quirk_r));
 
-    // --- 嘴角：上扬 / 下垂 ---
-    let corner_up = positive(avg(f.mouth_corner_l, f.mouth_corner_r));
-    let corner_down = positive(-avg(f.mouth_corner_l, f.mouth_corner_r));
-
     // --- 嘴型：张口程度 + 横向宽度 ---
     let open = positive(f.mouth_open);
+
+    // --- 嘴角：上扬 / 下垂 ---
+    // 张嘴时上唇会整体抬高，`mouth_corner_updown` 于是也会变正 —— 如果直接当"笑"，
+    // 就会变成"一张嘴就在笑"。这里用张口程度把它压回去（这就是反向的那个耦合）。
+    let corner_up_raw = positive(avg(f.mouth_corner_l, f.mouth_corner_r));
+    let corner_up = (corner_up_raw - opts.open_vs_smile * open).max(0.0);
+    let corner_down = positive(-avg(f.mouth_corner_l, f.mouth_corner_r));
+
+    // --- 眼睛睁大（比平时睁得更大 = 惊讶的第二个信号）---
+    let eye_wide = positive(avg(f.eye_l, f.eye_r));
     let wide_raw = positive(f.mouth_wide);
     let narrow = positive(-f.mouth_wide);
     // 嘴角外拉也是"嘴宽"的另一个视角，权重给小一点
@@ -286,7 +331,8 @@ pub fn compute_weights(f: &RawFeatures) -> ExprWeights {
     // 情绪组
     w.set(
         "surprised",
-        (brow_up * 1.0 + quirk * 0.15 + brow_tilt_up * 0.10).min(1.0),
+        (brow_up * 1.0 + eye_wide * opts.eye_surprise + quirk * 0.15 + brow_tilt_up * 0.10)
+            .min(1.0),
     );
     w.set(
         "angry",
@@ -301,11 +347,16 @@ pub fn compute_weights(f: &RawFeatures) -> ExprWeights {
     w.set("sad", (corner_down * 1.0 + brow_tilt_up * 0.30).min(1.0));
 
     // 元音组（口型 = 张口程度 × 横向宽窄 的二维分布）
-    w.set("aa", (open * wide * 0.95).min(1.0));
-    w.set("oh", (open * (1.0 - 0.85 * wide)).min(1.0));
-    w.set("ou", (narrow * (0.35 + 0.65 * open) * 0.90).min(1.0));
-    w.set("ih", (open_mid * wide * 0.70).min(1.0));
-    w.set("ee", (open_low * wide * 0.60).min(1.0));
+    // 笑的时候让位：happy 的 morph 自己就会把嘴拉开，再叠 oh/aa 就是一张血盆大口。
+    let vowel_yield = (1.0 - opts.mouth_override * w.get("happy")).clamp(0.0, 1.0);
+    w.set("aa", (open * wide * 0.95 * vowel_yield).min(1.0));
+    w.set("oh", (open * (1.0 - 0.85 * wide) * vowel_yield).min(1.0));
+    w.set(
+        "ou",
+        (narrow * (0.35 + 0.65 * open) * 0.90 * vowel_yield).min(1.0),
+    );
+    w.set("ih", (open_mid * wide * 0.70 * vowel_yield).min(1.0));
+    w.set("ee", (open_low * wide * 0.60 * vowel_yield).min(1.0));
     w
 }
 
@@ -352,6 +403,7 @@ fn parse_packet(
     qz_sign: f32,
     pitch_flip: bool,
     smooth: f32,
+    opts: &ExprOptions,
 ) -> bool {
     if buf.len() < PACKET_LEN || !buf.len().is_multiple_of(PACKET_LEN) {
         return false; // 多脸包按 1785 的整数倍拼接；只取第一张脸
@@ -386,7 +438,7 @@ fn parse_packet(
         .clamp(0.0, 1.0)
         .max(feats.blink_from_eyes());
     // 14 个特征 → 11 个表情槽（纯函数，不依赖历史值）
-    let mut target = compute_weights(&feats);
+    let mut target = compute_weights(&feats, opts);
     target.set("blink", blink);
 
     // COLONQ_TRACK_DEBUG=1：打印关键原始值；=2：连 14 个特征和 11 个权重一起打。
@@ -549,6 +601,13 @@ pub fn start_receiver(
                 "面捕调试等级 2：每个采样点打印 14 个特征 + 11 个表情权重（日志会明显变多）"
             );
         }
+        let expr_opts = ExprOptions::from_env();
+        log::info!(
+            "表情映射参数: 笑的嘴部压制={} 睁眼→惊讶={} 张嘴→非笑={}",
+            expr_opts.mouth_override,
+            expr_opts.eye_surprise,
+            expr_opts.open_vs_smile
+        );
         let flip_mode: u8 = utils::env_parse("COLONQ_FLIP").unwrap_or(1);
         let offset_rad = utils::env_csv3("COLONQ_ROT_OFFSET")
             .map(|(x, y, z)| (x.to_radians(), y.to_radians(), z.to_radians()))
@@ -580,6 +639,7 @@ pub fn start_receiver(
                         qz_sign,
                         pitch_flip,
                         smooth,
+                        &expr_opts,
                     ) {
                         log::debug!("忽略无效面捕包（{} bytes，来自 {}）", len, src);
                     }
@@ -667,9 +727,13 @@ mod tests {
 
     /// 特征数组 → 表情权重（跳过网络，直接测映射函数）
     fn weights_from(f: [f32; 14]) -> ExprWeights {
+        weights_with(f, &ExprOptions::default())
+    }
+
+    fn weights_with(f: [f32; 14], opts: &ExprOptions) -> ExprWeights {
         let packet = make_feature_packet(&f);
         let raw = RawFeatures::read(&packet).expect("14 个特征应可解析");
-        compute_weights(&raw)
+        compute_weights(&raw, opts)
     }
 
     #[test]
@@ -932,6 +996,68 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn opening_the_mouth_is_not_read_as_a_smile() {
+        // 光张嘴（上唇被抬高 → corner_up 变正）不该被判成笑
+        let mut f = [0.0f32; 14];
+        f[12] = 0.9; // 张嘴
+        f[8] = 0.8; // 嘴角信号被上唇带起来
+        f[10] = 0.8;
+        let w = weights_from(f);
+        assert!(w.get("happy") < 0.35, "张嘴不该触发大笑: {:?}", w);
+        assert!(w.get("oh") > 0.3, "该是张嘴的口型: {:?}", w);
+    }
+
+    #[test]
+    fn smiling_suppresses_vowel_mouth_shapes() {
+        // 笑 + 同时张嘴：元音口型要让位，否则 happy 和 oh/aa 叠出"血盆大口"
+        let mut smile_only = [0.0f32; 14];
+        smile_only[8] = 1.0;
+        smile_only[10] = 1.0;
+        let happy = weights_from(smile_only);
+        assert!(happy.get("happy") > 0.9);
+        assert_eq!(happy.get("aa"), 0.0);
+        assert_eq!(happy.get("oh"), 0.0);
+
+        let mut smile_and_open = [0.0f32; 14];
+        smile_and_open[8] = 1.0;
+        smile_and_open[10] = 1.0;
+        smile_and_open[12] = 0.8;
+        let both = weights_with(smile_and_open, &ExprOptions::default());
+        let no_override = weights_with(
+            smile_and_open,
+            &ExprOptions {
+                mouth_override: 0.0,
+                ..ExprOptions::default()
+            },
+        );
+        assert!(both.get("oh") > 0.0, "说话时还是要能张嘴: {:?}", both);
+        assert!(
+            both.get("oh") < no_override.get("oh") * 0.6,
+            "笑的时候元音口型应被明显压低: {} vs {}",
+            both.get("oh"),
+            no_override.get("oh")
+        );
+    }
+
+    #[test]
+    fn wide_eyes_alone_can_trigger_surprise() {
+        let mut f = [0.0f32; 14];
+        f[0] = 0.8; // 眼睛比平时睁得大
+        f[1] = 0.8;
+        let w = weights_from(f);
+        assert!(w.get("surprised") > 0.3, "睁大眼睛应给惊讶: {:?}", w);
+        // 关掉这条通路后又回到 0
+        let w0 = weights_with(
+            f,
+            &ExprOptions {
+                eye_surprise: 0.0,
+                ..ExprOptions::default()
+            },
+        );
+        assert_eq!(w0.get("surprised"), 0.0);
     }
 
     #[test]

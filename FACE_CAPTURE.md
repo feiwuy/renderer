@@ -257,3 +257,45 @@ set -x COLONQ_EXPR_GAINS "happy=1.4,aa=0.7,sad=0"
 - **11 个顶点属性槽已经用满**（`GL_MAX_VERTEX_ATTRIBS = 16`：0 位置 1 法线 2 UV 3 关节 4 权重，5..15 全是表情）。想再加表情（比如单眼 wink 用的 `blinkLeft`/`blinkRight`）必须换机制：要么做"槽位重映射"（用环境变量把某个槽改绑到别的 morph target），要么把 morph target 搬到纹理里用 `gl_VertexID` 取样。
 - 模型里还有 13 个没有名字的 morph target（VRoid 内部库遗留），目前不可达。
 - 表情幅度取决于**模型自身的 morph delta**。实测 `my_avatar.vrm` 的眨眼 delta 中位数只有 1.8 mm、最大 26 mm（按真实人体尺度导出），在 128×64 的网格下折算下来只有零点几个像素——所以"表情读不出来"很多时候不是权重的问题，而是**分辨率/幅度**的问题。要更明显，优先考虑：网格提到 `COLONQ_GRID=192x96`、把表情相关部位（眼/眉/嘴）单独分 part id 换字形、或对 morph delta 做整体放大。
+
+### 模型里还有多少没用到的 morph target
+
+`my_avatar.vrm` 的脸 mesh 一共有 **57 个 morph target**，VRM 只命名了 14 个（neutral + 5 情绪 + 5 元音 + blink/Left/Right）。按顶点位移的**区域**分类（离线统计，见下），其余的是：
+
+| 下标 | 顶点数 | 平均位移 | 区域 / 特征 |
+|---|---:|---:|---|
+| 14, 15 | 925 / 925 | 0.0038 | **blinkR / blinkL**，左右分开（可以做单眼 wink） |
+| 6, 7, 9, 10 | 72~88 | 0.0005~0.0031 | 眼周小形变（左右对称，量很小） |
+| 12, 16, 17, 20, 21, 22 | 998~1420 | 0.0006~0.0039 | 眼型（闭眼/眯眼一类） |
+| 18, 19 | 525 / 521 | 0.0060 | 眼型，**左右分开** |
+| 23 | 462 | 0.0319 | 眼部最大的一处形变（眼型/高光隐藏一类） |
+| 24 | 204 | 0.0107 | 眼下/颊 |
+| 25~38 | 29~1772 | 0.0004~0.0190 | 嘴部形状（含左右分开的 37/38、上/下唇） |
+| 39~43 | — | — | **aa / ih / ou / ee / oh**（已用） |
+| 44~56 | 42~500 | 0.0006~0.0594 | 嘴部形状，其中 44 的位移是全模型最大的一处（0.059，比 aa 还大） |
+| 8, 11 | 0 | 0 | **空 target**，绑了也不会动 |
+
+（40 个非标准 target 里，8、11 是空的；其余的位移都集中在眼周和嘴部。）
+
+想自己看某个 target 长什么样：
+
+```fish
+sh tools/morph_sheet.sh 23 33 44 45     # 渲染这几个到 tests/morph-sheet/*-view.png
+LEVEL=3 sh tools/morph_sheet.sh 23      # 放大 3 倍看形变
+```
+
+或者直接用环境变量（`COLONQ_EXPR_MAP` 换绑 + `COLONQ_EXPR_FORCE` 钉死权重）：
+
+```fish
+set -x COLONQ_EXPR_MAP "happy=23"
+set -x COLONQ_EXPR_FORCE "happy=1"
+./run-obs.sh
+```
+
+单眼 wink 就是：`COLONQ_EXPR_MAP="relaxed=blinkLeft"`，然后让 `relaxed` 槽由左眼驱动
+（需要小改 `compute_weights`，目前 `relaxed` 还是嘴角小微笑）。
+
+### 还缺的能力
+
+- **眼球注视**：模型有 `leftEye`/`rightEye` 骨骼，但 VRM 没有 `lookAt` 扩展，本渲染器也没驱动它们——眼睛永远是正视。OpenSeeFace 发的 68 个 2D 点/70 个 3D 点里其实没有瞳孔信息，只能靠头部姿态近似，价值有限。
+- **真正的"自定义表情"**：受 16 个顶点属性上限限制，只能在 11 个槽位里换绑；要同时启用任意多个 target，得把 morph 数据搬到纹理里用 `gl_VertexID` 取样（方案见 README 的后续计划）。

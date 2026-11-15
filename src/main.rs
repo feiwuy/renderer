@@ -371,6 +371,45 @@ fn render_loop(
         log::info!("逐表情增益: {:?}", expr_gains);
     }
 
+    // COLONQ_EXPR_FORCE="happy=1,aa=0.5"：把指定槽**钉死**在固定权重，完全忽略面捕。
+    // 用途：确认某个表情在自己的模型上到底长什么样；配合 COLONQ_EXPR_MAP（把某个槽
+    // 改绑到别的 preset 或 morph 下标）就能把模型里任何 morph target 单独显示出来。
+    // 这里**不做 0..1 夹取**，所以可以用 2~4 来放大看形变。
+    let mut expr_force: [Option<f32>; tracking::EXPR_NAMES.len()] =
+        [None; tracking::EXPR_NAMES.len()];
+    if let Ok(spec) = std::env::var("COLONQ_EXPR_FORCE") {
+        for item in spec.split(',') {
+            let item = item.trim();
+            if item.is_empty() {
+                continue;
+            }
+            match item.split_once('=') {
+                Some((name, val)) => {
+                    match (tracking::expr_index(name.trim()), val.trim().parse::<f32>()) {
+                        (Some(i), Ok(v)) => expr_force[i] = Some(v),
+                        _ => {
+                            log::warn!("COLONQ_EXPR_FORCE 里的 {:?} 不认识（要用 名字=权重）", item)
+                        }
+                    }
+                }
+                None => log::warn!("COLONQ_EXPR_FORCE 里的 {:?} 不是 名字=权重 形式", item),
+            }
+        }
+        let forced: Vec<String> = tracking::EXPR_NAMES
+            .iter()
+            .zip(expr_force.iter())
+            .filter_map(|(n, f)| f.map(|v| format!("{}={}", n, v)))
+            .collect();
+        log::warn!(
+            "表情强制模式生效（忽略面捕）: {}",
+            if forced.is_empty() {
+                "（没有有效的 名字=权重）".to_string()
+            } else {
+                forced.join(" ")
+            }
+        );
+    }
+
     // 表情槽 → uniform 位置的固定表（下标即 tracking::EXPR_NAMES 的槽位号）。
     // 建一次就够：以前每帧都要在 HashMap 里做 11 次字符串查找。
     let expr_slots: Vec<(usize, gl::types::GLint)> = {
@@ -686,7 +725,10 @@ fn render_loop(
                 if name == "blink" {
                     w = w.max(idle_blink);
                 }
-                let w = w.clamp(0.0, 1.0);
+                let w = match expr_force[*idx] {
+                    Some(forced) => forced, // 强制模式不夹取，方便放大看形变
+                    None => w.clamp(0.0, 1.0),
+                };
                 gl::Uniform1f(*uniform, w);
                 uploaded.push((name, w));
             }
