@@ -151,32 +151,23 @@ pub fn start_receiver(bind: &str, sts: SharedTrackingState) -> std::io::Result<s
     let addr = socket.local_addr()?;
     let mut counter = 0u64;
     // 面捕平滑系数（COLONQ_SMOOTH=0~0.95，越大越平滑但延迟越高；默认 0.5）
-    let smooth = std::env::var("COLONQ_SMOOTH").ok()
-        .and_then(|v| v.trim().parse::<f32>().ok())
+    let smooth = utils::env_parse::<f32>("COLONQ_SMOOTH")
         .map(|v| v.clamp(0.0, 0.95)).unwrap_or(0.5);
     if smooth > 0.001 {
         log::info!("面捕平滑: 系数 {}（越大越平滑，延迟越高）", smooth);
     }
     std::thread::spawn(move || {
         let diag = utils::env_flag("COLONQ_TRACK_DEBUG", false);
-        let flip_mode: u8 = std::env::var("COLONQ_FLIP").ok()
-            .and_then(|v| v.trim().parse().ok()).unwrap_or(1);
-        let offset_rad = std::env::var("COLONQ_ROT_OFFSET").ok()
-            .and_then(|v| {
-                let parts: Vec<f32> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
-                if parts.len() == 3 { Some((parts[0].to_radians(), parts[1].to_radians(), parts[2].to_radians())) } else { None }
-            }).unwrap_or((0.0, 0.0, 0.0));
+        let flip_mode: u8 = utils::env_parse("COLONQ_FLIP").unwrap_or(1);
+        let offset_rad = utils::env_csv3("COLONQ_ROT_OFFSET")
+            .map(|(x, y, z)| (x.to_radians(), y.to_radians(), z.to_radians()))
+            .unwrap_or((0.0, 0.0, 0.0));
         // COLONQ_PITCH_SIGN=-1：低头/抬头方向反转（俯仰轴镜像）
         // COLONQ_QSIGN="x,y,z"：分别翻转原始四元数的三个分量（默认 1,1,1）
         // COLONQ_SWAP_PY=1：交换补偿欧拉角的 pitch 和 yaw（实测：点头↔摇头轴错位时用）
         let pitch_flip = utils::env_flag("COLONQ_PITCH_FLIP", false);
-        let (qx_sign, qy_sign, qz_sign) = std::env::var("COLONQ_QSIGN").ok()
-            .and_then(|v| {
-                let parts: Vec<f32> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
-                if parts.len() == 3 { Some((parts[0], parts[1], parts[2])) } else { None }
-            }).unwrap_or((1.0, 1.0, 1.0));
-        let pitch_sign: f32 = std::env::var("COLONQ_PITCH_SIGN").ok()
-            .and_then(|v| v.trim().parse().ok()).unwrap_or(qx_sign);
+        let (qx_sign, qy_sign, qz_sign) = utils::env_csv3("COLONQ_QSIGN").unwrap_or((1.0, 1.0, 1.0));
+        let pitch_sign: f32 = utils::env_parse("COLONQ_PITCH_SIGN").unwrap_or(qx_sign);
         let mut buf = [0u8; 65535];
         loop {
             match socket.recv_from(&mut buf) {

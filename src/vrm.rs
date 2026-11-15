@@ -242,8 +242,7 @@ impl Scene {
         }).collect();
 
         // COLONQ_TEX_MAX=1024 之类：把过大的贴图降采样，内存占用能省一大截
-        let tex_max: u32 = std::env::var("COLONQ_TEX_MAX").ok()
-            .and_then(|v| v.trim().parse().ok()).unwrap_or(0);
+        let tex_max: u32 = crate::utils::env_parse::<u32>("COLONQ_TEX_MAX").unwrap_or(0);
         if tex_max > 0 {
             log::info!("COLONQ_TEX_MAX={}：超过这个边长的贴图会被降采样", tex_max);
         }

@@ -4,6 +4,17 @@ use colored::Colorize;
 
 use crate::{context, utils, gl, avatar, term};
 
+/// 左边缘竖线图案（邻格掩码，位序见 `Framebuffer::get_surrounding`）：
+/// `0b11010110` = 左列三格 + 上 + 下（"[" 形）；`0b11010111` 是它多一个右下邻格时的变体。
+///
+/// 上游此处写作 `s == 0b11010110 || s == 0b11010110`，右操作数恒不生效
+/// （clippy: equal_expressions_as_operands）。对照上一分支 `0b01101011 / 0b01101111`
+/// 的配对关系（后者 = 前者 + 左下邻格），本分支缺失的常量应是同一配对的镜像，
+/// 即 `0b11010111` = `0b11010110` + 右下邻格。
+fn is_left_edge_bar(s: u8) -> bool {
+    s == 0b11010110 || s == 0b11010111
+}
+
 pub struct Framebuffer {
     pub tex: gl::types::GLuint,
     pub fbo: gl::types::GLuint,
@@ -191,7 +202,7 @@ impl Framebuffer {
                         let s = self.get_surrounding(ctx.bgcolor, x, y);
                         if s == 0b01101011 || s == 0b01101111 {
                             c1 = '|'; is_emoji = false;
-                        } else if s == 0b11010110 || s == 0b11010110 {
+                        } else if is_left_edge_bar(s) {
                             if is_emoji { c1 = '.'; }
                             c2 = '|'; is_emoji = false;
                         } else if s == 0b00101011 || s == 0b00101111 || s == 0b00101110 || s == 0b00101100 || s == 0b00001011 {
@@ -301,7 +312,7 @@ impl Framebuffer {
                             let s = self.get_surrounding(ctx.bgcolor, x, y);
                             if s == 0b01101011 || s == 0b01101111 {
                                 c1 = '|'; is_emoji = false;
-                            } else if s == 0b11010110 || s == 0b11010110 {
+                            } else if is_left_edge_bar(s) {
                                 if is_emoji { c1 = '.'; }
                                 c2 = '|'; is_emoji = false;
                             } else if s == 0b00101011 || s == 0b00101111 || s == 0b00101110 || s == 0b00101100 || s == 0b00001011 {
@@ -336,7 +347,7 @@ impl Framebuffer {
                 }
                 write!(output, "\r\n").unwrap();
             }
-            stdout.write(&output).unwrap();
+            stdout.write_all(&output).unwrap();
         }
     }
 
@@ -385,7 +396,7 @@ impl Framebuffer {
                             let s = self.get_surrounding(ctx.bgcolor, x, y);
                             if s == 0b01101011 || s == 0b01101111 {
                                 c1 = '|'; is_emoji = false;
-                            } else if s == 0b11010110 || s == 0b11010110 {
+                            } else if is_left_edge_bar(s) {
                                 if is_emoji { c1 = '.'; }
                                 c2 = '|'; is_emoji = false;
                             } else if s == 0b00101011 || s == 0b00101111 || s == 0b00101110 || s == 0b00101100 || s == 0b00001011 {

@@ -41,6 +41,70 @@ pub fn flag_value(raw: &str) -> Option<bool> {
     }
 }
 
+/// 读取并解析环境变量。
+///
+/// 变量不存在 → `None`（静默，属正常情况）；
+/// 变量存在但为空值 / 无法解析 → 打一条 warn 再返回 `None`。
+/// 这样可以避免"我明明改了变量却没反应"却毫无提示。
+pub fn env_parse<T: std::str::FromStr>(name: &str) -> Option<T> {
+    let raw = std::env::var(name).ok()?;
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        log::warn!("环境变量 {} 为空值，已忽略（使用默认值）", name);
+        return None;
+    }
+    match trimmed.parse::<T>() {
+        Ok(v) => Some(v),
+        Err(_) => {
+            log::warn!("环境变量 {} 的值 {:?} 无法解析为 {}，已忽略（使用默认值）",
+                       name, raw, std::any::type_name::<T>());
+            None
+        }
+    }
+}
+
+/// 解析 `"a,b,c"` 形式的三个浮点数（相机位置、旋转偏移、四元数符号等）。
+/// 数量不对或含非法数字时打 warn 并返回 `None`。
+pub fn env_csv3(name: &str) -> Option<(f32, f32, f32)> {
+    let raw = std::env::var(name).ok()?;
+    match parse_csv3(&raw) {
+        Some(v) => Some(v),
+        None => {
+            log::warn!("环境变量 {} 的值 {:?} 不是 3 个逗号分隔的数字，已忽略（使用默认值）",
+                       name, raw);
+            None
+        }
+    }
+}
+
+fn parse_csv3(raw: &str) -> Option<(f32, f32, f32)> {
+    let parts: Vec<&str> = raw.split(',').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let mut out = [0f32; 3];
+    for (i, part) in parts.iter().enumerate() {
+        out[i] = part.trim().parse::<f32>().ok()?;
+    }
+    Some((out[0], out[1], out[2]))
+}
+
+/// 把当前生效的 `COLONQ_*` 环境变量全部打进日志，方便确认"改的到底有没有生效"。
+pub fn log_env_snapshot() {
+    let mut vars: Vec<(String, String)> = std::env::vars()
+        .filter(|(k, _)| k.starts_with("COLONQ_"))
+        .collect();
+    vars.sort();
+    if vars.is_empty() {
+        log::info!("配置: 未设置任何 COLONQ_* 变量（全部走默认值）");
+        return;
+    }
+    log::info!("配置: 共 {} 个 COLONQ_* 变量生效", vars.len());
+    for (k, v) in vars {
+        log::info!("    {}={}", k, v);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,5 +144,26 @@ mod tests {
         // 从未设置 → 默认值
         assert!(env_flag("COLONQ_TEST_FLAG_NEVER_SET_A", true));
         assert!(!env_flag("COLONQ_TEST_FLAG_NEVER_SET_A", false));
+    }
+
+    #[test]
+    fn env_parse_returns_none_for_bad_or_empty_values() {
+        std::env::set_var("COLONQ_TEST_PARSE_OK", " 2.5 ");
+        std::env::set_var("COLONQ_TEST_PARSE_BAD", "abc");
+        std::env::set_var("COLONQ_TEST_PARSE_EMPTY", "   ");
+        assert_eq!(env_parse::<f32>("COLONQ_TEST_PARSE_OK"), Some(2.5));
+        assert_eq!(env_parse::<f32>("COLONQ_TEST_PARSE_BAD"), None);
+        assert_eq!(env_parse::<f32>("COLONQ_TEST_PARSE_EMPTY"), None);
+        assert_eq!(env_parse::<f32>("COLONQ_TEST_PARSE_MISSING"), None);
+    }
+
+    #[test]
+    fn env_csv3_requires_exactly_three_numbers() {
+        std::env::set_var("COLONQ_TEST_CSV_OK", "0,-20,360");
+        std::env::set_var("COLONQ_TEST_CSV_SHORT", "1,2");
+        std::env::set_var("COLONQ_TEST_CSV_BAD", "1,x,3");
+        assert_eq!(env_csv3("COLONQ_TEST_CSV_OK"), Some((0.0, -20.0, 360.0)));
+        assert_eq!(env_csv3("COLONQ_TEST_CSV_SHORT"), None);
+        assert_eq!(env_csv3("COLONQ_TEST_CSV_BAD"), None);
     }
 }

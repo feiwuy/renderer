@@ -92,6 +92,18 @@ python3 tools/vrm0_to_vrm1_min.py 你的模型.vrm assets/新名字.vrm
 
 ## 环境变量
 
+**开关类变量的统一取值**（`COLONQ_PARTS`、`COLONQ_IDLE`、`COLONQ_FIT`、`COLONQ_PROFILE`、`COLONQ_NO_MPV`、`COLONQ_DUMP_*` 等）：
+
+| 写法 | 含义 |
+|---|---|
+| `1` / `true` / `on` / `yes`（或任何其他非空值） | 打开 |
+| `0` / `false` / `off` / `no` | 关闭 |
+| 未设置，或设成空字符串 | 用该变量的默认值 |
+
+> 也就是说 `COLONQ_PARTS=0` 与 `COLONQ_PARTS=` 都是**关闭**。早期版本里这两种写法反而会打开开关，是已修复的 bug。
+
+**排查"改了却没生效"**：启动时日志（`colonq.log`）会先打印一行 `配置: 共 N 个 COLONQ_* 变量生效`，后面逐条列出名字和值；数值/三元组解析失败会打 `WARN 环境变量 XXX 的值 "..." 无法解析…`，不会再静默回落默认值。
+
 | 变量 | 默认 | 作用 |
 |---|---|---|
 | `COLONQ_VIEW` | `head` | 取景预设：`head`=头部+肩胸、`face`=面部特写（更近）、`bust`=半身（自动开胸部裁切）、`full`=全身 |

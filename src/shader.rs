@@ -77,8 +77,7 @@ impl Shader {
             let prog = gl::CreateProgram();
 
             // 优先用环境变量；否则用模型实际的骨骼数（向 4 对齐），夹在 32..=256
-            let max_joints: i32 = std::env::var("COLONQ_MAX_JOINTS").ok()
-                .and_then(|v| v.trim().parse::<i32>().ok())
+            let max_joints: i32 = utils::env_parse::<i32>("COLONQ_MAX_JOINTS")
                 .unwrap_or_else(|| ((joints_hint + 3) / 4 * 4).max(32))
                 .clamp(16, 256);
             log::info!("joint_matrices 数组大小: {}（{} 个常量寄存器 / NVIDIA 上限 1024）",
@@ -162,8 +161,7 @@ impl Shader {
                 uniform_part_id: gl::GetUniformLocation(prog, b"part_id\0".as_ptr() as *const i8),
                 uniform_part_pass: gl::GetUniformLocation(prog, b"part_pass\0".as_ptr() as *const i8),
                 parts_enabled: utils::env_flag("COLONQ_PARTS", false),
-                outline_width: std::env::var("COLONQ_OUTLINE").ok()
-                    .and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(0.004),
+                outline_width: utils::env_parse::<f32>("COLONQ_OUTLINE").unwrap_or(0.004),
                 uniform_joint_matrices: gl::GetUniformLocation(prog, b"joint_matrices\0".as_ptr() as *const i8),
                 max_joints,
                 clip_y,

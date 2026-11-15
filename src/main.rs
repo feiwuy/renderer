@@ -22,16 +22,17 @@ mod display;
 
 
 
+/// 读 f32 环境变量；值非法时由 utils::env_parse 打 warn（不再静默回落）
 fn env_f32(name: &str, default: f32) -> f32 {
-    std::env::var(name).ok().and_then(|v| v.trim().parse().ok()).unwrap_or(default)
+    utils::env_parse(name).unwrap_or(default)
 }
 
+/// 读 "x,y,z" 环境变量；格式不对时打 warn 并回落默认值
 fn env_vec3(name: &str, default: glam::Vec3) -> glam::Vec3 {
-    let parsed = std::env::var(name).ok().and_then(|v| {
-        let parts: Vec<f32> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
-        if parts.len() == 3 { Some(glam::Vec3::new(parts[0], parts[1], parts[2])) } else { None }
-    });
-    parsed.unwrap_or(default)
+    match utils::env_csv3(name) {
+        Some((x, y, z)) => glam::Vec3::new(x, y, z),
+        None => default,
+    }
 }
 
 /// 判断模型是否带 VRM 0.x 的旧扩展（`"VRM":{`）。
@@ -61,8 +62,13 @@ fn render_loop(
 ) {
     let ctx = context::Context::new();
     // 内部采样始终使用请求的网格。输出尺寸只影响终端显示，不能拖低 OBS 推流精度。
-    let requested = std::env::var("COLONQ_GRID").ok()
-        .and_then(|v| display::Size::parse(&v)).unwrap_or(display::Size::new(128, 64));
+    let requested = match std::env::var("COLONQ_GRID") {
+        Ok(raw) => display::Size::parse(&raw).unwrap_or_else(|| {
+            log::warn!("COLONQ_GRID 的值 {:?} 不是 WxH 形式，已忽略（使用 128x64）", raw);
+            display::Size::new(128, 64)
+        }),
+        Err(_) => display::Size::new(128, 64),
+    };
     let (grid_w, grid_h) = (requested.w.clamp(16, 512) as i32, requested.h.clamp(16, 256) as i32);
     let requested = display::Size::new(grid_w as usize, grid_h as usize);
     // 开关统一走 utils::env_flag：COLONQ_NO_TERM=0 表示"要终端输出"（未设置时默认要）
@@ -242,8 +248,7 @@ fn render_loop(
 
     // COLONQ_DUMP_PNG=1 时把画面存成 PNG，用于无终端/无显示环境下验证渲染是否正确
     let dump_png = utils::env_flag("COLONQ_DUMP_PNG", false);
-    let dump_at = std::env::var("COLONQ_DUMP_AT").ok()
-        .and_then(|v| v.trim().parse::<i32>().ok()).unwrap_or(120).max(1);
+    let dump_at = utils::env_parse::<i32>("COLONQ_DUMP_AT").unwrap_or(120).max(1);
     let arm_pose = env_f32("COLONQ_ARM_POSE", -0.80);
     let no_mpv = utils::env_flag("COLONQ_NO_MPV", false);
     // 待机动画：让模型自己动起来（转头、眨眼、呼吸），默认开启
@@ -254,8 +259,7 @@ fn render_loop(
     // 序列存图：COLONQ_DUMP_SEQ=1 时存成 frame-000005.png 这样，方便合成动图
     let dump_seq = utils::env_flag("COLONQ_DUMP_SEQ", false);
     // 终端重画间隔（帧）：默认 6 → 60fps 下约 10 次/秒。设 1 则每帧都重画（更流畅但更费 CPU）
-    let term_every = std::env::var("COLONQ_TERM_EVERY").ok()
-        .and_then(|v| v.trim().parse::<i32>().ok()).unwrap_or(1).max(1);
+    let term_every = utils::env_parse::<i32>("COLONQ_TERM_EVERY").unwrap_or(1).max(1);
     // 分层计时（COLONQ_PROFILE=1 时每 60 帧输出一次各阶段平均耗时）
     let profile = utils::env_flag("COLONQ_PROFILE", false);
     let (mut t_avatar, mut t_blit, mut t_swap, mut t_term, mut t_pop, mut t_cnt) =
@@ -389,7 +393,7 @@ fn render_loop(
                 let mut f = std::fs::File::create("oneframe.txt").unwrap();
                 // term.render_stream_nocolor_small(&mut f);
                 // term.serialize(&mut f);
-                f.write(&term.serialize_and_compress()).unwrap();
+                f.write_all(&term.serialize_and_compress()).unwrap();
             }
 
         }
@@ -601,6 +605,8 @@ fn render_loop(
 fn main() {
     simple_logging::log_to_file("colonq.log", log::LevelFilter::Debug).unwrap();
     log_panics::init();
+    // 先把所有生效的 COLONQ_* 打进日志：改完变量能一眼确认有没有传到（值非法会有 warn）
+    utils::log_env_snapshot();
 
     let tracking_state = tracking::TrackingState::new();
     let shared_tracking_state = std::sync::Arc::new(std::sync::Mutex::new(tracking_state));

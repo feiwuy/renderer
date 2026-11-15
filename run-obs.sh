@@ -51,7 +51,9 @@ export COLONQ_QSIGN="${COLONQ_QSIGN:-1,1,1}"               # 四元数三分量�
 export COLONQ_PITCH_FLIP="${COLONQ_PITCH_FLIP:-1}"         # 俯仰方向反转（点头反向时设 1）
 export COLONQ_TRACK_GAIN="${COLONQ_TRACK_GAIN:-1}"         # 头部旋转幅度增益（1=原始，2~3=明显放大）
 export COLONQ_EXPR_GAIN="${COLONQ_EXPR_GAIN:-1}"           # 眨眼/张嘴幅度增益
-export COLONQ_TRACK_BIND="${COLONQ_TRACK_BIND:-0.0.0.0:11573}"  # 面捕 UDP 绑定（收局域网数据）
+export COLONQ_TRACK_BIND="${COLONQ_TRACK_BIND:-127.0.0.1:11573}"  # 面捕 UDP 绑定：默认只听本机
+# 面捕跑在另一台机器（如 Ubuntu Server）时才需要放开，并务必只放行那台机器的 IP：
+#   COLONQ_TRACK_BIND=0.0.0.0:11573 ./run-obs.sh
 
 # ---------- 描边发光 ----------
 # export COLONQ_OUTLINE="${COLONQ_OUTLINE:-0.010}"                    # 描边宽度（世界单位）

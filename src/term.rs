@@ -203,7 +203,7 @@ impl Term {
     pub fn render_stream<W>(&self, out: &mut W, bg: (u8, u8, u8))
     where W: Write {
         let buf = self.encode_stream(bg);
-        out.write(&buf).unwrap();
+        out.write_all(&buf).unwrap();
     }
 
     pub fn render_stream_nocolor<W>(&self, out: &mut W)
@@ -240,7 +240,7 @@ impl Term {
             }
             write!(output, "\r\n").unwrap();
         }
-        out.write(&output).unwrap();
+        out.write_all(&output).unwrap();
     }
 
     pub fn render_stream_nocolor_small<W>(&self, out: &mut W)
@@ -277,7 +277,7 @@ impl Term {
             }
             write!(output, "\r\n").unwrap();
         }
-        out.write(&output).unwrap();
+        out.write_all(&output).unwrap();
     }
 }
 
