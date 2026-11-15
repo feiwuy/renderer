@@ -45,9 +45,12 @@ impl FrameStore {
 /// Exact RGB palette; a cell carries linear grid index, Unicode scalar, palette index.
 /// Empty spaces are omitted, NOT shifted: their coordinates remain in the grid.
 fn encode_frame(seq: u64, w: usize, h: usize, bg: (u8, u8, u8), cells: &Cells) -> String {
-    let mut palette = Vec::new();
-    let mut indices = HashMap::new();
-    let mut entries = String::new();
+    use std::fmt::Write as _;
+    let mut palette: Vec<(u8, u8, u8)> = Vec::new();
+    let mut indices: HashMap<(u8, u8, u8), usize> = HashMap::new();
+    // 逐格拼 JSON。原来是每格一次 format!（8192 格 = 8192 次堆分配/帧），
+    // 这里直接写进预留好容量的 String，输出字节完全不变。
+    let mut entries = String::with_capacity(cells.iter().map(|row| row.len()).sum::<usize>() * 12);
     for (y, row) in cells.iter().enumerate() {
         for (x, &(glyph, rgb)) in row.iter().enumerate() {
             if glyph == ' ' { continue; }
@@ -57,15 +60,20 @@ fn encode_frame(seq: u64, w: usize, h: usize, bg: (u8, u8, u8), cells: &Cells) -
                 index
             });
             if !entries.is_empty() { entries.push(','); }
-            entries.push_str(&format!("[{},{},{}]", y * w + x, glyph as u32, color));
+            let _ = write!(entries, "[{},{},{}]", y * w + x, glyph as u32, color);
         }
     }
-    let palette = palette.iter().map(|&(r, g, b)| format!("[{},{},{}]", r, g, b))
-        .collect::<Vec<_>>().join(",");
+    let mut palette_json = String::with_capacity(palette.len() * 13);
+    for (i, &(r, g, b)) in palette.iter().enumerate() {
+        if i > 0 { palette_json.push(','); }
+        let _ = write!(palette_json, "[{},{},{}]", r, g, b);
+    }
     let produced_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default().as_millis();
-    format!("{{\"seq\":{},\"w\":{},\"h\":{},\"producedAt\":{},\"bg\":[{},{},{}],\"palette\":[{}],\"cells\":[{}]}}",
-            seq, w, h, produced_at, bg.0, bg.1, bg.2, palette, entries)
+    let mut out = String::with_capacity(entries.len() + palette_json.len() + 96);
+    let _ = write!(out, "{{\"seq\":{},\"w\":{},\"h\":{},\"producedAt\":{},\"bg\":[{},{},{}],\"palette\":[{}],\"cells\":[{}]}}",
+            seq, w, h, produced_at, bg.0, bg.1, bg.2, palette_json, entries);
+    out
 }
 
 fn escape(ch: char) -> String {
@@ -201,6 +209,20 @@ mod tests {
         assert!(json.contains("\"palette\":[[255,254,128]]"));
         assert!(json.contains("\"cells\":[[1,64,0]]"));
     }
+    #[test]
+    fn encode_frame_emits_bg_palette_and_cells_in_order() {
+        // 覆盖 encode_frame 改写后的输出结构：背景、调色板去重顺序、空格跳过但不位移
+        let cells = vec![
+            vec![('a',(10,20,30)), (' ',(0,0,0)), ('b',(40,50,60))],
+            vec![('c',(10,20,30)), ('d',(70,80,90)), (' ',(0,0,0))],
+        ];
+        let json = encode_frame(7, 3, 2, (1,2,3), &cells);
+        assert!(json.starts_with("{\"seq\":7,\"w\":3,\"h\":2,\"producedAt\":"));
+        assert!(json.contains("\"bg\":[1,2,3]"));
+        assert!(json.contains("\"palette\":[[10,20,30],[40,50,60],[70,80,90]]"));
+        assert!(json.contains("\"cells\":[[0,97,0],[2,98,1],[3,99,0],[4,100,2]]"));
+    }
+
     #[test]
     fn numeric_glyphs_are_json_safe() {
         let cells = vec![vec![('"',(1,2,3)),('\\',(1,2,3)),('😺',(1,2,3))]];

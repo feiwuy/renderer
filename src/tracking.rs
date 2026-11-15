@@ -10,6 +10,27 @@ pub type SharedTrackingState = std::sync::Arc<std::sync::Mutex<TrackingState>>;
 /// 面捕数据在多久内算“有效”；超时后回退到待机动画
 pub const TRACKING_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// 平滑系数的标定基准：`COLONQ_SMOOTH` 按"每 1/30 秒收到一个包"来标定。
+const SMOOTH_REF_DT: f32 = 1.0 / 30.0;
+
+/// 把 `COLONQ_SMOOTH`（0~0.95，越大越平滑）换算成**与包率无关**的混合系数。
+///
+/// 旧做法是每个包固定混 `1 - smooth`，于是面捕端发 15fps 和 30fps 时手感完全不同
+/// （包率越低越迟钝）。这里改成按时间做指数衰减：
+/// `alpha = 1 - smooth^(dt / SMOOTH_REF_DT)`。
+/// 在 30 包/秒时与旧行为**完全一致**；包率降低时 alpha 自动变大（不会变迟钝），
+/// 包率升高时自动变小（平滑量不变），长时间断流后重新收到包则几乎直接吸附。
+pub fn smooth_alpha(smooth: f32, dt: f32) -> f32 {
+    let s = smooth.clamp(0.0, 0.95);
+    if s <= 0.001 {
+        return 1.0; // 关闭平滑
+    }
+    if !(dt > 0.0) {
+        return 1.0 - s; // dt 不可用（首包/时钟异常）时退回旧公式
+    }
+    (1.0 - s.powf(dt / SMOOTH_REF_DT)).clamp(0.0, 1.0)
+}
+
 /// facetracker.py 单脸数据包长度（见 tools/openseeface-server.patch 的字段表）
 pub const PACKET_LEN: usize = 1785;
 
@@ -122,19 +143,26 @@ fn parse_packet(buf: &[u8], sts: &SharedTrackingState, diag: bool, counter: u64,
         new = glam::Quat::from_euler(glam::EulerRot::YXZ, r, -p, y);
     }
     let blink = (1.0 - (left_blinking + right_blinking) / 2.0).clamp(0.0, 1.0);
+    let now = Instant::now();
     let mut state = sts.lock().unwrap();
     // 指数平滑：用上一次姿态与新姿态做球面插值（slerp），smooth 越大越平滑。
     // 首包（last_packet 为 None）不平滑——没有可依据的上一次姿态。
-    if smooth > 0.001 && state.last_packet.is_some() {
+    // 混合系数按"距上一包的间隔"换算（见 smooth_alpha），因此包率变化不影响手感。
+    let dt = state.last_packet
+        .map(|t| now.saturating_duration_since(t).as_secs_f32())
+        .unwrap_or(0.0);
+    let alpha = smooth_alpha(smooth, dt);
+    let smoothing = alpha < 1.0 && state.last_packet.is_some();
+    if smoothing {
         let prev = state.orientation;
-        new = prev.slerp(new, 1.0 - smooth);
+        new = prev.slerp(new, alpha);
     }
     state.orientation = new;
     // 权重平滑同样跳过首包
-    if smooth > 0.001 && state.last_packet.is_some() {
+    if smoothing {
         let smooth_w = |prev: Option<&f32>, new_val: f32| -> f32 {
             match prev {
-                Some(p) => p + (new_val - p) * (1.0 - smooth),
+                Some(p) => p + (new_val - p) * alpha,
                 None => new_val,
             }
         };
@@ -146,7 +174,7 @@ fn parse_packet(buf: &[u8], sts: &SharedTrackingState, diag: bool, counter: u64,
         state.expression_weights.insert("blink".to_owned(), blink);
         state.expression_weights.insert("oh".to_owned(), mouth_open.clamp(0.0, 1.0));
     }
-    state.last_packet = Some(Instant::now());
+    state.last_packet = Some(now);
     true
 }
 
@@ -264,6 +292,28 @@ mod tests {
         let expected = glam::Quat::from_xyzw(-0.7071068, -0.7071068, -3.0908623e-8, 3.0908623e-8);
         assert!((orientation.dot(expected) - 1.0).abs() < 1e-4,
                 "orientation={:?} expected={:?}", orientation, expected);
+    }
+
+    #[test]
+    fn smooth_alpha_matches_old_behaviour_at_reference_rate() {
+        // 30 包/秒（基准）时必须等于旧公式 1 - smooth，否则升级会悄悄改变手感
+        assert!((smooth_alpha(0.5, 1.0 / 30.0) - 0.5).abs() < 1e-5);
+        assert!((smooth_alpha(0.8, 1.0 / 30.0) - 0.2).abs() < 1e-5);
+        // 关闭平滑
+        assert_eq!(smooth_alpha(0.0, 1.0 / 30.0), 1.0);
+    }
+
+    #[test]
+    fn smooth_alpha_compensates_packet_rate() {
+        // 15 包/秒：间隔翻倍，单包系数变大，整体响应速度不变
+        assert!((smooth_alpha(0.5, 2.0 / 30.0) - 0.75).abs() < 1e-5);
+        // 60 包/秒：间隔减半，单包系数变小
+        assert!((smooth_alpha(0.5, 0.5 / 30.0) - (1.0 - 0.5f32.sqrt())).abs() < 1e-5);
+        // 断流一秒后重连：几乎直接吸附到新姿态
+        assert!(smooth_alpha(0.5, 1.0) > 0.999);
+        // 两个 1/30 秒的包累积效果 == 一个 2/30 秒的包（指数衰减自洽）
+        let two_steps = 1.0 - (1.0 - smooth_alpha(0.5, 1.0 / 30.0)).powi(2);
+        assert!((two_steps - smooth_alpha(0.5, 2.0 / 30.0)).abs() < 1e-5);
     }
 
     #[test]

@@ -229,14 +229,7 @@ fn render_loop(
     let mut fb = framebuffer::Framebuffer::new(&ctx, true, (grid_w, grid_h), (0, 0));
     let pixels_len = (ctx.dims.w * ctx.dims.h * 4.0) as usize;
     let pixels = vec![0; pixels_len];
-    let screen = framebuffer::Framebuffer {
-        fbo: 0,
-        tex: 0,
-        dims: ctx.dims.clone(),
-        offsets: (0, 0),
-        pixels_len,
-        pixels,
-    };
+    let screen = framebuffer::Framebuffer::blit_target(ctx.dims.clone(), pixels_len, pixels);
 
     // 终端字符宽高约 1:2，所以正方形的世界视野需要横向多一倍像素
     let fb_projection = glam::Mat4::perspective_lh(
@@ -490,14 +483,23 @@ fn render_loop(
             } else {
                 0.0
             };
-            for (enm, uniform) in &shader.uniform_expressions {
-                let tracked = *tracking_state.lock().unwrap().expression_weights.get(enm).unwrap_or(&0.0) * expr_gain;
+            // 表情权重先一次性取快照：原来在循环里每个表情各锁一次（11 次/帧）
+            let expr_snapshot: Vec<f32> = {
+                let st = tracking_state.lock().unwrap();
+                shader.uniform_expressions.iter()
+                    .map(|(name, _)| *st.expression_weights.get(name).unwrap_or(&0.0))
+                    .collect()
+            };
+            for ((enm, uniform), raw) in shader.uniform_expressions.iter().zip(expr_snapshot) {
+                let tracked = raw * expr_gain;
                 let w = if enm == "blink" { tracked.max(idle_blink) } else { tracked };
                 gl::Uniform1f(*uniform, w.clamp(0.0, 1.0));
             }
         }
         let ta = std::time::Instant::now();
         avatar.render(&ctx, &shader, &view, &fb_projection, &control);
+        // 画完立刻发起异步回读（拷进 PBO，不阻塞），下一帧的 ASCII 阶段再取
+        fb.request_readback();
         t_avatar += ta.elapsed().as_secs_f64() * 1000.0;
         rendered_updates += 1;
         let tb = std::time::Instant::now();
@@ -517,7 +519,7 @@ fn render_loop(
             else { (ctx.bgcolor.0 as u8, ctx.bgcolor.1 as u8, ctx.bgcolor.2 as u8) };
         if framecount % term_every == 0 && (term_mode || frame_store.is_some()) {
             let t0 = std::time::Instant::now();
-            fb.populate_pixels();
+            fb.fetch_readback(); // 上一帧发起的那次异步回读
             t_pop += t0.elapsed().as_secs_f64() * 1000.0;
             fb.render_term(&ctx, framecount, &mut players, &control.0.lock().unwrap().palette, term, term_counter);
             term_counter += 1;
@@ -560,7 +562,7 @@ fn render_loop(
                 gl::BindFramebuffer(gl::FRAMEBUFFER, 0);
                 while gl::GetError() != 0 {} // 清掉可能残留的错误，避免主循环把它当致命错误退出
             }
-            fb.populate_pixels();
+            fb.fetch_readback();
             let name = if dump_seq { format!("frame-{:06}.png", framecount) } else { "frame64.png".to_string() };
             let _ = image::save_buffer(
                 &name, &fb.pixels, fb.dims.w as u32, fb.dims.h as u32, image::ColorType::Rgba8,
