@@ -262,7 +262,7 @@ pub struct ExprOptions {
     pub mouth_gain: f32,
     /// 嘴部响应曲线（gamma）。小于 1 会抬起中低段，大于 1 更"线性到后半段"。
     pub mouth_curve: f32,
-    /// 笑眼由什么触发：`0`=嘴角笑（默认）、`1`=张嘴幅度、`2`=两者取大
+    /// 笑眼由什么触发：`0`=嘴角笑、`1`=纯张嘴幅度、`2`=两者取大（默认）
     pub laugh_src: u8,
     /// 嘴部**幅度上限**：五个口型最后统一乘这个。
     /// 灵敏度（`mouth_gain`）决定"多小的张口就开始动"，这个决定"张到最大时多大" ——
@@ -281,7 +281,7 @@ impl Default for ExprOptions {
             laugh_hi: 0.95,
             laugh_close: 1.0,
             laugh_iris: 0.9,
-            laugh_src: 0,
+            laugh_src: 2,
             mouth_gain: 1.8,
             mouth_curve: 1.0,
             mouth_max: 0.7,
@@ -315,8 +315,8 @@ impl ExprOptions {
                 .to_ascii_lowercase()
                 .as_str()
             {
+                "happy" | "smile" | "嘴角" | "0" => 0,
                 "mouth" | "open" | "张嘴" | "1" => 1,
-                "either" | "both" | "max" | "2" => 2,
                 _ => d.laugh_src,
             },
         }
@@ -415,11 +415,16 @@ pub fn compute_weights(f: &RawFeatures, opts: &ExprOptions) -> ExprWeights {
     // "整只眼闭上" 和 "眼珠变白" 的 morph），权重按 happy 的斜坡来 ——
     // 小小一笑只动嘴角，笑到一定程度眼角才眯起来，这才是动画里的观感。
     if opts.eye_laugh {
-        // 触发源：嘴角笑 / 张嘴幅度 / 两者取大
+        // 触发源：
+        //   0 = 嘴角笑
+        //   1 = 纯张嘴幅度（说话也会眯眼，一般别用）
+        //   2 = 两者取大，但"张嘴"这一路要求**同时有点笑意** —— 真人哈哈大笑是
+        //       "嘴角翘 + 张嘴"一起发生，而单纯说话不该把眼睛眯起来。
+        let mouth_laugh = open * ramp(corner_up_raw, 0.15, 0.55);
         let src = match opts.laugh_src {
+            0 => w.get("happy"),
             1 => open,
-            2 => w.get("happy").max(open),
-            _ => w.get("happy"),
+            _ => w.get("happy").max(mouth_laugh),
         };
         let t = ramp(src, opts.laugh_lo, opts.laugh_hi);
         w.set("relaxed", t * opts.laugh_close);
@@ -1216,6 +1221,7 @@ mod tests {
             by_mouth
         );
 
+        // either 默认要求"张嘴 + 有点笑意"：只张嘴、嘴角不动 → 不眯（免得说话时眯眼）
         let either = weights_with(
             f,
             &ExprOptions {
@@ -1224,7 +1230,22 @@ mod tests {
                 ..ExprOptions::default()
             },
         );
-        assert!(either.get("relaxed") > 0.5, "{:?}", either);
+        assert_eq!(either.get("relaxed"), 0.0, "{:?}", either);
+
+        // 张嘴 + 嘴角上扬 = 真的大笑 → 眯
+        let mut g = [0.0f32; 14];
+        g[12] = 0.8; // 张嘴
+        g[8] = 0.6; // 嘴角也翘
+        g[10] = 0.6;
+        let laugh = weights_with(
+            g,
+            &ExprOptions {
+                eye_laugh: true,
+                laugh_src: 2,
+                ..ExprOptions::default()
+            },
+        );
+        assert!(laugh.get("relaxed") > 0.5, "张嘴+笑意应眯眼: {:?}", laugh);
     }
 
     #[test]
