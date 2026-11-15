@@ -68,9 +68,9 @@ export COLONQ_EXPR_GAIN="${COLONQ_EXPR_GAIN:-1}"           # 表情权重总增�
 export COLONQ_TRACK_BIND="${COLONQ_TRACK_BIND:-0.0.0.0:11573}"
 
 # ---------- 描边发光 ----------
-export COLONQ_OUTLINE="${COLONQ_OUTLINE:-0.010}"                    # 描边宽度（世界单位）
-export COLONQ_OUTLINE_COLOR="${COLONQ_OUTLINE_COLOR:-0.2,0.9,1.0}"  # 描边颜色（青色）
-export COLONQ_OUTLINE_GLOW="${COLONQ_OUTLINE_GLOW:-3.0}"            # 发光强度（0=普通描边）
+# export COLONQ_OUTLINE="${COLONQ_OUTLINE:-0.010}"                    # 描边宽度（世界单位）
+# export COLONQ_OUTLINE_COLOR="${COLONQ_OUTLINE_COLOR:-0.2,4.9,13.0}"  # 描边颜色（青色）
+# export COLONQ_OUTLINE_GLOW="${COLONQ_OUTLINE_GLOW:-3.0}"            # 发光强度（0=普通描边）
 
 # ---------- 动画与调试 ----------
 export COLONQ_IDLE="${COLONQ_IDLE:-0.5}"            # 待机动画（面捕离线时的摆动）；0=关

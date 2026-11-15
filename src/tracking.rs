@@ -262,6 +262,10 @@ pub struct ExprOptions {
     pub mouth_gain: f32,
     /// 嘴部响应曲线（gamma）。小于 1 会抬起中低段，大于 1 更"线性到后半段"。
     pub mouth_curve: f32,
+    /// 嘴部**幅度上限**：五个口型最后统一乘这个。
+    /// 灵敏度（`mouth_gain`）决定"多小的张口就开始动"，这个决定"张到最大时多大" ——
+    /// 觉得嘴张得太夸张就调小它，不用牺牲起效点。
+    pub mouth_max: f32,
 }
 
 impl Default for ExprOptions {
@@ -277,6 +281,7 @@ impl Default for ExprOptions {
             laugh_iris: 0.9,
             mouth_gain: 1.8,
             mouth_curve: 1.0,
+            mouth_max: 0.7,
         }
     }
 }
@@ -300,6 +305,7 @@ impl ExprOptions {
             laugh_iris: read("COLONQ_EYE_LAUGH_IRIS", d.laugh_iris),
             mouth_gain: read("COLONQ_MOUTH_GAIN", d.mouth_gain).max(0.01),
             mouth_curve: read("COLONQ_MOUTH_CURVE", d.mouth_curve).max(0.01),
+            mouth_max: read("COLONQ_MOUTH_MAX", d.mouth_max).clamp(0.0, 2.0),
         }
     }
 }
@@ -382,16 +388,15 @@ pub fn compute_weights(f: &RawFeatures, opts: &ExprOptions) -> ExprWeights {
     w.set("sad", (corner_down * 1.0 + brow_tilt_up * 0.30).min(1.0));
 
     // 元音组（口型 = 张口程度 × 横向宽窄 的二维分布）
-    // 笑的时候让位：happy 的 morph 自己就会把嘴拉开，再叠 oh/aa 就是一张血盆大口。
+    //   `vowel_yield`：笑的时候让位（happy 的 morph 自己就会把嘴拉开）
+    //   `mouth_max`  ：张到最大时也就这么多 —— 这是"幅度"旋钮，和灵敏度分开
     let vowel_yield = (1.0 - opts.mouth_override * w.get("happy")).clamp(0.0, 1.0);
-    w.set("aa", (open * wide * 0.95 * vowel_yield).min(1.0));
-    w.set("oh", (open * (1.0 - 0.85 * wide) * vowel_yield).min(1.0));
-    w.set(
-        "ou",
-        (narrow * (0.35 + 0.65 * open) * 0.90 * vowel_yield).min(1.0),
-    );
-    w.set("ih", (open_mid * wide * 0.70 * vowel_yield).min(1.0));
-    w.set("ee", (open_low * wide * 0.60 * vowel_yield).min(1.0));
+    let m = vowel_yield * opts.mouth_max;
+    w.set("aa", (open * wide * 0.95 * m).min(1.0));
+    w.set("oh", (open * (1.0 - 0.85 * wide) * m).min(1.0));
+    w.set("ou", (narrow * (0.35 + 0.65 * open) * 0.90 * m).min(1.0));
+    w.set("ih", (open_mid * wide * 0.70 * m).min(1.0));
+    w.set("ee", (open_low * wide * 0.60 * m).min(1.0));
 
     // 笑到眯眼（`>＜` 笑眼）：借用 relaxed / ih 两个槽位（vrm.rs 已把它们改绑到
     // "整只眼闭上" 和 "眼珠变白" 的 morph），权重按 happy 的斜坡来 ——
@@ -799,8 +804,8 @@ mod tests {
         wait_tracking(&sts);
         let s = sts.lock().unwrap();
         assert_eq!(s.expression_weights.get("blink"), 0.5);
-        // 默认嘴部灵敏度 1.8：0.42 × 1.8 = 0.756（宽=0，所以全给 oh）
-        assert!((s.expression_weights.get("oh") - 0.756).abs() < 1e-5);
+        // 默认灵敏度 1.8、幅度上限 0.7：0.42 × 1.8 × 0.7 = 0.5292（宽=0，全给 oh）
+        assert!((s.expression_weights.get("oh") - 0.42 * 1.8 * 0.7).abs() < 1e-5);
         assert!(s.tracking_active());
         assert_ne!(s.expression_weights.get("oh"), 10.25);
     }
@@ -874,8 +879,8 @@ mod tests {
             .send_to(&make_packet(0.0, 0.0, [0.0, 0.0, 0.0, 1.0], 0.9), addr)
             .unwrap();
         wait_tracking(&sts);
-        // 默认嘴部灵敏度 1.8：0.9 × 1.8 会被夹到 1.0
-        assert_eq!(sts.lock().unwrap().expression_weights.get("oh"), 1.0);
+        // 0.9 × 1.8 先夹到 1.0，再乘幅度上限 0.7
+        assert!((sts.lock().unwrap().expression_weights.get("oh") - 0.7).abs() < 1e-6);
     }
 
     #[test]
@@ -887,7 +892,7 @@ mod tests {
             .send_to(&make_packet(0.0, 0.0, [0.0, 0.0, 0.0, 1.0], 5.0), addr)
             .unwrap();
         wait_tracking(&sts);
-        assert_eq!(sts.lock().unwrap().expression_weights.get("oh"), 1.0);
+        assert!((sts.lock().unwrap().expression_weights.get("oh") - 0.7).abs() < 1e-6);
     }
 
     // ---- 14 个特征 → 11 个表情槽的映射 ----
@@ -998,7 +1003,7 @@ mod tests {
         f[12] = 0.9;
         f[13] = 0.8;
         let aa = weights_from(f);
-        assert!(aa.get("aa") > 0.5, "{:?}", aa);
+        assert!(aa.get("aa") > 0.3, "{:?}", aa);
         assert!(
             aa.get("aa") > aa.get("oh"),
             "张开且宽应是 aa 而不是 oh: {:?}",
@@ -1009,13 +1014,13 @@ mod tests {
         let mut f = [0.0f32; 14];
         f[12] = 0.9;
         let oh = weights_from(f);
-        assert!(oh.get("oh") > 0.8, "{:?}", oh);
+        assert!(oh.get("oh") > 0.6, "{:?}", oh);
         assert_eq!(oh.get("aa"), 0.0);
 
-        // 比平时窄（嘟嘴）→ う
+        // 比平时窄（嘟嘴）→ う（幅度上限 0.7 之后约 0.18）
         let mut f = [0.0f32; 14];
         f[13] = -0.8;
-        assert!(weights_from(f).get("ou") > 0.2);
+        assert!(weights_from(f).get("ou") > 0.15);
 
         // 微张 + 嘴宽 → え / い
         let mut f = [0.0f32; 14];
