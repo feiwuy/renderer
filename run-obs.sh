@@ -73,7 +73,7 @@ export COLONQ_TRACK_BIND="${COLONQ_TRACK_BIND:-0.0.0.0:11573}"
 # export COLONQ_OUTLINE_GLOW="${COLONQ_OUTLINE_GLOW:-3.0}"            # 发光强度（0=普通描边）
 
 # ---------- 动画与调试 ----------
-export COLONQ_IDLE="${COLONQ_IDLE:-1}"            # 待机动画（面捕离线时的摆动）；0=关
+export COLONQ_IDLE="${COLONQ_IDLE:-0.5}"            # 待机动画（面捕离线时的摆动）；0=关
 #   ↑ 原来是 ${COLONQ_IDLE:1}：这是 bash 的"从第 1 个字符截取"，会得到空串，
 #     意思是"设了也等于没设"，想让待机动画关掉得写 COLONQ_IDLE=0（现在才真生效）
 export COLONQ_TERM_EVERY="${COLONQ_TERM_EVERY:-1}" # 终端刷新间隔帧数（推流模式无影响）
