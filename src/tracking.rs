@@ -257,6 +257,11 @@ pub struct ExprOptions {
     pub laugh_close: f32,
     /// 眼珠变白（`ih` 槽）的最大权重；觉得"眼睛整个没了"就把这个调小或设 0
     pub laugh_iris: f32,
+    /// 嘴部灵敏度：`mouth_open` 特征先乘这个再夹到 0~1。
+    /// 大于 1 = 小张口就有明显反应（此前面捕要"张很大"才有嘴型）。
+    pub mouth_gain: f32,
+    /// 嘴部响应曲线（gamma）。小于 1 会抬起中低段，大于 1 更"线性到后半段"。
+    pub mouth_curve: f32,
 }
 
 impl Default for ExprOptions {
@@ -270,6 +275,8 @@ impl Default for ExprOptions {
             laugh_hi: 0.95,
             laugh_close: 1.0,
             laugh_iris: 0.9,
+            mouth_gain: 1.8,
+            mouth_curve: 1.0,
         }
     }
 }
@@ -291,6 +298,8 @@ impl ExprOptions {
             laugh_hi: read("COLONQ_EYE_LAUGH_HI", d.laugh_hi),
             laugh_close: read("COLONQ_EYE_LAUGH_CLOSE", d.laugh_close),
             laugh_iris: read("COLONQ_EYE_LAUGH_IRIS", d.laugh_iris),
+            mouth_gain: read("COLONQ_MOUTH_GAIN", d.mouth_gain).max(0.01),
+            mouth_curve: read("COLONQ_MOUTH_CURVE", d.mouth_curve).max(0.01),
         }
     }
 }
@@ -328,7 +337,11 @@ pub fn compute_weights(f: &RawFeatures, opts: &ExprOptions) -> ExprWeights {
     let quirk = positive(avg(f.brow_quirk_l, f.brow_quirk_r));
 
     // --- 嘴型：张口程度 + 横向宽度 ---
-    let open = positive(f.mouth_open);
+    //
+    // `mouth_open` 是 OpenSeeFace 相对自己中位数归一化后的量：小张口时只有零点几，
+    // 张到"比自己平时的最大值还大"才到 1。所以直接当权重用会显得"要张很大才有嘴型"。
+    // 这里先乘灵敏度（默认 1.8）再夹取，中低段用 gamma 曲线抬起来。
+    let open = positive(f.mouth_open * opts.mouth_gain).powf(opts.mouth_curve);
 
     // --- 嘴角：上扬 / 下垂 ---
     // 张嘴时上唇会整体抬高，`mouth_corner_updown` 于是也会变正 —— 如果直接当"笑"，
@@ -786,7 +799,8 @@ mod tests {
         wait_tracking(&sts);
         let s = sts.lock().unwrap();
         assert_eq!(s.expression_weights.get("blink"), 0.5);
-        assert_eq!(s.expression_weights.get("oh"), 0.42);
+        // 默认嘴部灵敏度 1.8：0.42 × 1.8 = 0.756（宽=0，所以全给 oh）
+        assert!((s.expression_weights.get("oh") - 0.756).abs() < 1e-5);
         assert!(s.tracking_active());
         assert_ne!(s.expression_weights.get("oh"), 10.25);
     }
@@ -860,7 +874,8 @@ mod tests {
             .send_to(&make_packet(0.0, 0.0, [0.0, 0.0, 0.0, 1.0], 0.9), addr)
             .unwrap();
         wait_tracking(&sts);
-        assert_eq!(sts.lock().unwrap().expression_weights.get("oh"), 0.9);
+        // 默认嘴部灵敏度 1.8：0.9 × 1.8 会被夹到 1.0
+        assert_eq!(sts.lock().unwrap().expression_weights.get("oh"), 1.0);
     }
 
     #[test]
@@ -1074,7 +1089,7 @@ mod tests {
         );
         assert!(both.get("oh") > 0.0, "说话时还是要能张嘴: {:?}", both);
         assert!(
-            both.get("oh") < no_override.get("oh") * 0.6,
+            both.get("oh") < no_override.get("oh") * 0.7,
             "笑的时候元音口型应被明显压低: {} vs {}",
             both.get("oh"),
             no_override.get("oh")

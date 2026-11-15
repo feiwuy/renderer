@@ -368,3 +368,23 @@ set -x COLONQ_EYE_LAUGH 1
 也就是说**小微笑只动嘴角，笑到 55% 以上眼角才开始眯**，完全眯起来是 happy≈0.95。
 觉得“眼睛整个没了”就 `COLONQ_EYE_LAUGH_IRIS=0.4` 或 `0`；
 不想要眯眼就 `COLONQ_EYE_LAUGH_CLOSE=0`。斜坡用 `COLONQ_EYE_LAUGH_LO/_HI` 调。
+
+### 嘴部灵敏度（"要张很大才有嘴型"）
+
+`mouth_open` 是 OpenSeeFace **相对你自己中位数**归一化后的量（见本文第 10 节）：
+小张口时只有零点几，张到"超过你平时的最大值"才到 1。直接当权重用，观感就是
+"嘴要张很大才有反应"。
+
+现在的做法是先用灵敏度放大、再用曲线抬中低段：
+
+```
+open = clamp01(mouth_open × COLONQ_MOUTH_GAIN) ^ COLONQ_MOUTH_CURVE
+```
+
+| 变量 | 默认 | 效果 |
+|---|---|---|
+| `COLONQ_MOUTH_GAIN` | `1.8` | 0.25 的小张口 → 0.45 的嘴型权重（改之前是 0.25，几乎看不出来） |
+| `COLONQ_MOUTH_CURVE` | `1.0` | 设 `0.7` 再抬中低段；设 `1.3` 更"后半段才动" |
+
+这个 `open` 同时喂给 `aa`/`oh`/`ou`/`ee`/`ih` 五个口型，所以调它是改"整体嘴部灵敏度"；
+只想单独放大某个口型请用 `COLONQ_EXPR_GAINS="oh=1.3"`。
