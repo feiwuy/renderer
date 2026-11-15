@@ -234,12 +234,18 @@ fn handle(mut stream: TcpStream, store: Arc<FrameStore>) -> std::io::Result<()> 
             "GET only",
         );
     }
-    let path = tokens
-        .next()
-        .unwrap_or("/")
-        .split('?')
-        .next()
-        .unwrap_or("/");
+    let raw_path = tokens.next().unwrap_or("/").to_string();
+    let path = raw_path.split('?').next().unwrap_or("/");
+    // 把请求和 UA 记进日志：OBS 的浏览器源 UA 里带 "OBS"，一眼就能确认到底是不是
+    // OBS 连上来了、请求的是哪个 URL（包括端口和查询参数）。
+    if path != "/stream" {
+        let ua = request
+            .lines()
+            .find(|l| l.to_ascii_lowercase().starts_with("user-agent:"))
+            .map(|l| l[l.find(':').map_or(0, |i| i + 1)..].trim().to_string())
+            .unwrap_or_else(|| "-".to_string());
+        log::info!("HTTP 请求 {} → {} | UA={}", raw_path, path, ua);
+    }
     match path {
         "/stream" => handle_sse(stream, &store),
         "/frame" => respond(
@@ -271,18 +277,8 @@ fn handle(mut stream: TcpStream, store: Arc<FrameStore>) -> std::io::Result<()> 
     }
 }
 
-pub fn run(port: u16, store: Arc<FrameStore>) {
-    let listener = match TcpListener::bind(("127.0.0.1", port)) {
-        Ok(l) => l,
-        Err(e) => {
-            log::error!("推流服务启动失败（127.0.0.1:{}）：{}", port, e);
-            return;
-        }
-    };
-    log::info!(
-        "ASCII 推流: http://127.0.0.1:{} （OBS 浏览器源；默认 385×350 小画面）",
-        port
-    );
+/// 在一个已绑定的 listener 上循环接受连接（每个连接一个线程）
+fn accept_loop(listener: TcpListener, store: Arc<FrameStore>) {
     for connection in listener.incoming() {
         match connection {
             Ok(stream) => {
@@ -296,6 +292,34 @@ pub fn run(port: u16, store: Arc<FrameStore>) {
             Err(e) => log::warn!("推流接收连接失败: {}", e),
         }
     }
+}
+
+pub fn run(port: u16, store: Arc<FrameStore>) {
+    // IPv4 回环必须有；IPv6 回环尽力而为——OBS 的浏览器源里写 `localhost` 时，
+    // CEF 可能优先解析成 ::1，只绑 127.0.0.1 就会「连不上」且毫无提示。
+    let listener = match TcpListener::bind(("127.0.0.1", port)) {
+        Ok(l) => l,
+        Err(e) => {
+            log::error!("推流服务启动失败（127.0.0.1:{}）：{}", port, e);
+            return;
+        }
+    };
+    match TcpListener::bind((std::net::Ipv6Addr::LOCALHOST, port)) {
+        Ok(l) => {
+            let store = store.clone();
+            std::thread::spawn(move || accept_loop(l, store));
+            log::info!(
+                "推流服务同时监听 [::1]:{}（OBS 里写 localhost 也能连）",
+                port
+            );
+        }
+        Err(e) => log::debug!("IPv6 回环绑定失败（不影响 127.0.0.1）：{}", e),
+    }
+    log::info!(
+        "ASCII 推流: http://127.0.0.1:{} （OBS 浏览器源；默认 385×350 小画面）",
+        port
+    );
+    accept_loop(listener, store);
 }
 
 #[cfg(test)]
