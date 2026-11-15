@@ -8,7 +8,7 @@
     | python3 facetracker.py --raw-rgb 1 -W 640 -H 360 -F 24 --faces 1 -m 2 \
         -i <arch-ip> -p 11573 --silent 1
 
-依赖：仅 OpenCV + numpy（venv 里已装）。无额外下载。
+依赖：仅 OpenCV（venv 里已装）。无额外下载。
 
 关于延迟（重要）：
     MJPEG 源是"推流"，OpenCV 的 VideoCapture 会自己缓冲若干帧。如果消费者比生产者慢，
@@ -23,7 +23,6 @@ import threading
 import time
 
 import cv2
-import numpy as np
 
 
 class LatestFrame:
