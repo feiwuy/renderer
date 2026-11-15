@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 本项目要链接系统 libmpv（视频填充）和 SDL2（GL 窗口/离屏上下文）。
+      # libmpv-sys 用的是仓库里预生成的绑定，因此只需要装运行/链接用的开发包，
+      # 不需要 clang/bindgen。
+      - name: 安装系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config \
+            libmpv-dev libsdl2-dev
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: 缓存 cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: 格式检查
+        run: cargo fmt --check
+
+      - name: Clippy（警告即失败）
+        run: cargo clippy --release -- -D warnings
+
+      - name: 单元测试
+        run: cargo test --release
+
+      - name: viewer 布局测试
+        run: node src/viewer.test.cjs
+
+      # 渲染基准需要 GPU/驱动 + assets/ 里的模型，CI 上两者都没有：
+      # tools/golden.sh 会自动输出 SKIP 并以 0 退出，这里显式跑一遍只是留个记录。
+      - name: 渲染基准（CI 上会 SKIP）
+        run: sh tools/golden.sh
