@@ -36,7 +36,8 @@ class LatestFrame:
         self.seq = 0               # 读到第几帧
         self.stopped = False
         self.captured = 0          # 累计读到的帧数
-        self.dropped = 0           # 因被新帧覆盖而丢弃的旧帧数
+        self.consumed_seq = 0      # 取用方最后拿走的帧号
+        self.dropped = 0           # 还没被取用就被新帧覆盖掉的帧数（真正的积压丢弃）
         self.reconnects = 0
         self.thread = threading.Thread(target=self._run, daemon=True)
 
@@ -84,7 +85,8 @@ class LatestFrame:
                     break
                 continue
             with self.lock:
-                if self.frame is not None:
+                # 上一帧还没被取用就被这一帧覆盖 = 真的丢掉了一帧旧数据
+                if self.seq != self.consumed_seq:
                     self.dropped += 1
                 self.frame = frame
                 self.captured += 1
@@ -93,8 +95,9 @@ class LatestFrame:
             cap.release()
 
     def latest(self):
-        """返回 (seq, frame)；还没有帧时返回 (0, None)。"""
+        """返回 (seq, frame)；还没有帧时返回 (0, None)。取走后记下帧号，供统计丢帧。"""
         with self.lock:
+            self.consumed_seq = self.seq
             return self.seq, self.frame
 
 
@@ -123,6 +126,7 @@ def main():
     written = 0
     last_seq = 0
     last_report = time.perf_counter()
+    last_captured = last_dropped = last_written = 0
     try:
         while True:
             next_due += frame_duration
@@ -157,8 +161,14 @@ def main():
                 last_report = time.perf_counter()
                 with source.lock:
                     captured, dropped, reconnects = source.captured, source.dropped, source.reconnects
-                print(f'输出 {written} 帧（{written and args.fps:.0f} fps 目标）；'
-                      f'源 {captured / elapsed:.1f} fps，丢弃旧帧 {dropped} 个，重连 {reconnects} 次',
+                # 用「本轮增量」而不是累计值算速率：累计值除以单轮时长会越算越大，
+                # 看起来像源帧率在爬升（早期版本的统计 bug）
+                d_captured, d_dropped, d_written = captured - last_captured, dropped - last_dropped, written - last_written
+                last_captured, last_dropped, last_written = captured, dropped, written
+                print(f'本轮输出 {d_written} 帧（{d_written / elapsed:.1f} fps）；'
+                      f'源 {d_captured / elapsed:.1f} fps；'
+                      f'丢弃旧帧 {d_dropped} 个（{d_dropped / elapsed:.1f}/s，累计 {dropped}）；'
+                      f'重连 {reconnects} 次',
                       file=sys.stderr)
                 sys.stderr.flush()
     except KeyboardInterrupt:
