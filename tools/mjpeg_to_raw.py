@@ -9,13 +9,94 @@
         -i <arch-ip> -p 11573 --silent 1
 
 依赖：仅 OpenCV + numpy（venv 里已装）。无额外下载。
+
+关于延迟（重要）：
+    MJPEG 源是"推流"，OpenCV 的 VideoCapture 会自己缓冲若干帧。如果消费者比生产者慢，
+    旧帧就在缓冲里越堆越多，表现出来就是"刚启动还行，跑一会儿延迟越来越大"。
+    所以这里用一个读线程**持续读、只保留最新一帧**，主循环按目标帧率取用，
+    堆积的旧帧直接丢弃（会定期打印丢弃数，正常应该是每秒丢 6 帧左右，
+    即源 30fps、输出 24fps 的差值）。
 """
 import argparse
 import sys
+import threading
 import time
 
 import cv2
 import numpy as np
+
+
+class LatestFrame:
+    """后台线程不断读流，只保留最新一帧；取用方永远不会拿到积压的旧帧。"""
+
+    def __init__(self, url, candidates):
+        self.url = url
+        self.candidates = candidates
+        self.lock = threading.Lock()
+        self.frame = None          # 最新一帧（BGR）
+        self.seq = 0               # 读到第几帧
+        self.stopped = False
+        self.captured = 0          # 累计读到的帧数
+        self.dropped = 0           # 因被新帧覆盖而丢弃的旧帧数
+        self.reconnects = 0
+        self.thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        self.thread.start()
+        return self
+
+    def stop(self):
+        self.stopped = True
+
+    def _open(self):
+        for url in self.candidates:
+            cap = cv2.VideoCapture(url)
+            # 支持的 backend 上把缓冲压到 1 帧，进一步减少堆积
+            try:
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            except Exception:
+                pass
+            deadline = time.time() + 8
+            while time.time() < deadline:
+                ok, _ = cap.read()
+                if ok:
+                    print(f'source ok: {url}', file=sys.stderr)
+                    return cap
+                time.sleep(0.1)
+            cap.release()
+        return None
+
+    def _run(self):
+        cap = self._open()
+        if cap is None:
+            print('FAIL: 所有候选 URL 都读不出帧。用浏览器/VLC 确认手机流可用。', file=sys.stderr)
+            self.stopped = True
+            return
+        while not self.stopped:
+            ok, frame = cap.read()
+            if not ok:
+                # 流偶发中断：重连，而不是退出（延迟优先，先丢掉缓冲）
+                cap.release()
+                self.reconnects += 1
+                time.sleep(0.5)
+                cap = self._open()
+                if cap is None:
+                    self.stopped = True
+                    break
+                continue
+            with self.lock:
+                if self.frame is not None:
+                    self.dropped += 1
+                self.frame = frame
+                self.captured += 1
+                self.seq += 1
+        if cap is not None:
+            cap.release()
+
+    def latest(self):
+        """返回 (seq, frame)；还没有帧时返回 (0, None)。"""
+        with self.lock:
+            return self.seq, self.frame
 
 
 def main():
@@ -25,7 +106,8 @@ def main():
     parser.add_argument('--width', type=int, default=640)
     parser.add_argument('--height', type=int, default=360)
     parser.add_argument('--fps', type=float, default=24.0, help='输出节流帧率')
-    parser.add_argument('--jpeg-quality', type=int, default=90)
+    parser.add_argument('--report-seconds', type=float, default=10.0,
+                        help='每隔多少秒打印一次统计（0 = 不打印）')
     args = parser.parse_args()
 
     # 多个候选 URL，逐个尝试直到能读出帧
@@ -35,52 +117,50 @@ def main():
         if base + extra not in candidates:
             candidates.append(base + extra)
 
-    cap = None
-    for url in candidates:
-        cap = cv2.VideoCapture(url)
-        # MJPEG 流可能要几秒才出第一帧；用 read 的阻塞特性等
-        deadline = time.time() + 8
-        ok = False
-        while time.time() < deadline:
-            ok, _ = cap.read()
-            if ok:
-                break
-            time.sleep(0.1)
-        if ok:
-            print(f'source ok: {url}', file=sys.stderr)
-            break
-        cap.release()
-    if cap is None or not cap.isOpened():
-        print('FAIL: 所有候选 URL 都读不出帧。用浏览器/VLC 确认手机流可用。', file=sys.stderr)
-        return 1
+    source = LatestFrame(args.url, candidates).start()
 
     frame_duration = 1.0 / max(args.fps, 0.1)
-    last = time.perf_counter()
+    next_due = time.perf_counter()
     written = 0
+    last_seq = 0
+    last_report = time.perf_counter()
     try:
         while True:
-            # 节流到目标帧率，减轻 Wi-Fi 和下游 facetracker 的压力
-            now = time.perf_counter()
-            wait = frame_duration - (now - last)
+            next_due += frame_duration
+            wait = next_due - time.perf_counter()
             if wait > 0:
                 time.sleep(wait)
-            last = time.perf_counter()
+            else:
+                # 落后太多（例如下游卡顿）就重置节拍，避免补帧堆积
+                next_due = time.perf_counter()
 
-            ok, frame = cap.read()
-            if not ok:
-                # MJPEG 流偶尔丢一帧，重连而不是退出
-                cap.release()
-                time.sleep(0.5)
-                cap = cv2.VideoCapture(candidates[0])
+            if source.stopped and source.seq == 0:
+                print('FAIL: 视频源无法读取，退出', file=sys.stderr)
+                return 1
+
+            seq, frame = source.latest()
+            if frame is None:
                 continue
+            if seq == last_seq:
+                # 这一轮没有新帧（源比目标帧率慢）：不重复发送同一帧
+                continue
+            last_seq = seq
 
             if frame.shape[1] != args.width or frame.shape[0] != args.height:
                 frame = cv2.resize(frame, (args.width, args.height), interpolation=cv2.INTER_AREA)
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             sys.stdout.buffer.write(frame.tobytes())
+            sys.stdout.buffer.flush()
             written += 1
-            if written % (args.fps * 10) == 0:
-                print(f'forwarded {written} frames', file=sys.stderr)
+
+            if args.report_seconds > 0 and time.perf_counter() - last_report >= args.report_seconds:
+                elapsed = time.perf_counter() - last_report
+                last_report = time.perf_counter()
+                with source.lock:
+                    captured, dropped, reconnects = source.captured, source.dropped, source.reconnects
+                print(f'输出 {written} 帧（{written and args.fps:.0f} fps 目标）；'
+                      f'源 {captured / elapsed:.1f} fps，丢弃旧帧 {dropped} 个，重连 {reconnects} 次',
+                      file=sys.stderr)
                 sys.stderr.flush()
     except KeyboardInterrupt:
         return 0
@@ -89,7 +169,7 @@ def main():
         print(f'stream closed by downstream after {written} frames', file=sys.stderr)
         return 0
     finally:
-        cap.release()
+        source.stop()
 
 
 if __name__ == '__main__':

@@ -168,10 +168,17 @@ fn parse_packet(buf: &[u8], sts: &SharedTrackingState, diag: bool, counter: u64,
         };
     }
     let alpha = smooth_alpha(smooth, dt, state.nominal_dt);
-    // 每 300 个包报告一次实测包率，方便判断"延迟高是不是面捕端帧率太低"
+    // 每 300 个包报告一次实测包率 + 平滑折算出的延迟，方便判断延迟来源
     if counter % 300 == 0 && state.nominal_dt > 0.001 {
-        log::info!("面捕包率 ≈ {:.1} Hz（间隔 {:.1} ms），平滑系数 smooth={} → 稳态混合 {:.2}",
-                   1.0 / state.nominal_dt, state.nominal_dt * 1000.0, smooth, 1.0 - smooth);
+        let steady_alpha = 1.0 - smooth.clamp(0.0, 0.95);
+        // 一阶指数平滑的时间常数 τ = -dt / ln(1 - alpha)，可粗略看作引入的延迟
+        let tau_ms = if steady_alpha >= 0.999 {
+            0.0
+        } else {
+            -state.nominal_dt / (1.0 - steady_alpha).ln() * 1000.0
+        };
+        log::info!("面捕包率 ≈ {:.1} Hz（间隔 {:.1} ms），smooth={} → 每包混合 {:.2}，平滑约引入 {:.0} ms 延迟",
+                   1.0 / state.nominal_dt, state.nominal_dt * 1000.0, smooth, steady_alpha, tau_ms);
     }
     let smoothing = alpha < 1.0 && state.last_packet.is_some();
     if smoothing {
