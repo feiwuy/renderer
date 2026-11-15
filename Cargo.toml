@@ -11,25 +11,28 @@ codegen-units = 1
 [build-dependencies]
 gl_generator = "0.14.0" # opengl bindings
 
+# 依赖版本已按 Cargo.lock 固定成具体版本：原来是 "*"，一次 cargo update 就可能
+# 跳到不兼容的大版本（glam 这类 0.x 库尤其容易）。升级时请显式改这里的版本号，
+# 并跑一遍 `cargo test` + tools/golden.sh 确认渲染没变。
 [dependencies]
-rand = "*" # rng
-bitflags = "*" # C-style bitwise flags
+rand = "0.8.5" # rng
+bitflags = "2.3.3" # C-style bitwise flags
 sdl2 = "0.35.2" # sdl2 bindings（去掉了 image feature：本项目没用到 SDL2_image，图像解码走 image crate）
-glam = "*" # linear algebra library for opengl
+glam = "0.22.0" # linear algebra library for opengl
 gltf = {path = "deps/gltf-vrm", features = ["extras", "utils"]} # loader for .gltf models
-tobj = "*" # loader for .obj models
+tobj = "4.0.0" # loader for .obj models
 colored = "2.0.4" # ansi color
-termion = "*" # terminal escapes
-byteorder = "*" # bytes to float
-regex = "*" # regular expressions
-lexpr = "*" # s-expressions
-colors-transform = "*" # parsing and converting colors
-base64 = "*" # base64 encoding
-emojis = "*" # lookup emoji
-image = "*" # decode image
+termion = "2.0.1" # terminal escapes
+byteorder = "1.4.3" # bytes to float
+regex = "1.7.2" # regular expressions
+lexpr = "0.2.7" # s-expressions
+colors-transform = "0.2.11" # parsing and converting colors
+base64 = "0.13.1" # base64 encoding
+emojis = "0.5.2" # lookup emoji
+image = "0.24.5" # decode image
 libmpv-sys = {path = "deps/libmpv-rs/libmpv-sys"} # video playback（改用自带的预生成绑定，绕开旧 bindgen 不支持 mpv 0.41 头文件的匿名 union）
 libmpv = {path = "deps/libmpv-rs"} # video playback
-log = "*" # logging
-simple-logging = "*" # logging
-log-panics = { version = "*", features = ["with-backtrace"] } # log panics
-flate2 = "*" # gzip
+log = "0.4.17" # logging
+simple-logging = "2.0.2" # logging
+log-panics = { version = "2.1.0", features = ["with-backtrace"] } # log panics
+flate2 = "1.0.25" # gzip
