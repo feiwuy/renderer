@@ -88,11 +88,18 @@ export COLONQ_SMOOTH="${COLONQ_SMOOTH:-0.5}"       # 面捕平滑系数（0~0.95
 # COLONQ_DUMP_PNG=1 / COLONQ_DUMP_AT=N              # 存帧调试
 
 # ---------- 表情 ----------
-export COLONQ_EXPR_GAIN="${COLONQ_EXPR_GAIN:-1}"           # 总增益
 # export COLONQ_EXPR_GAINS="happy=1.2,sad=0.6,aa=0.8"      # 逐表情（不设就全 1）
 export COLONQ_MOUTH_OVERRIDE="${COLONQ_MOUTH_OVERRIDE:-0.7}"   # 笑时元音让位
 export COLONQ_OPEN_VS_SMILE="${COLONQ_OPEN_VS_SMILE:-0.45}"    # 张嘴不误判成笑
 export COLONQ_EYE_SURPRISE="${COLONQ_EYE_SURPRISE:-0.65}"      # 瞪眼→惊讶
+# 笑到眯眼（>＜ 笑眼）：借用 relaxed / ih 两个槽位，权重按 happy 斜坡给出
+export COLONQ_EYE_LAUGH="${COLONQ_EYE_LAUGH:-1}"               # 0 = 关掉笑眼
+export COLONQ_EYE_LAUGH_SRC="${COLONQ_EYE_LAUGH_SRC:-either}"  # happy / mouth / either
+# export COLONQ_EYE_LAUGH_LO=0.55 / _HI=0.95                   # 斜坡：多少开始眯、多少拉满
+# export COLONQ_EYE_LAUGH_CLOSE=1.0 / _IRIS=0.9                # 眯眼 / 眼珠变白的强度
+# 嘴部：灵敏度（起效点）和幅度上限分开调
+export COLONQ_MOUTH_MAX="${COLONQ_MOUTH_MAX:-0.7}"             # 张嘴最大幅度
+# export COLONQ_MOUTH_GAIN=1.8 / COLONQ_MOUTH_CURVE=1.0        # 多小的张口就开始动
 # export COLONQ_EXPR_MAP="relaxed=blinkLeft"               # 槽位换绑
 # export COLONQ_LOG=debug / COLONQ_TRACK_DEBUG=2           # 调参时开
 # Keep model, grid, camera and color settings inherited from the user's environment.
