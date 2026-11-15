@@ -245,6 +245,18 @@ pub struct ExprOptions {
     pub eye_surprise: f32,
     /// 张嘴时把"嘴角上扬"信号扣掉多少（乘以张口程度）。张嘴会让上唇抬高，容易被误判成笑。
     pub open_vs_smile: f32,
+    /// 笑到眯眼（`>＜`）。开启后 `relaxed` 槽改绑"整只眼闭上"的 morph、
+    /// `ih` 槽改绑"眼珠变白"的 morph（改绑在 vrm.rs），权重按 happy 强度斜坡给出。
+    /// 依据 VRM 1.0 的程序化表情组规范：Blink/Mouth 组之外的情绪表情可以带出眼部形变。
+    pub eye_laugh: bool,
+    /// 斜坡起点：happy 超过这个值才开始眯眼
+    pub laugh_lo: f32,
+    /// 斜坡终点：happy 到这个值时眯眼拉满
+    pub laugh_hi: f32,
+    /// 眯眼（`relaxed` 槽）的最大权重；设 0 就等于不要眯眼
+    pub laugh_close: f32,
+    /// 眼珠变白（`ih` 槽）的最大权重；觉得"眼睛整个没了"就把这个调小或设 0
+    pub laugh_iris: f32,
 }
 
 impl Default for ExprOptions {
@@ -253,6 +265,11 @@ impl Default for ExprOptions {
             mouth_override: 0.7,
             eye_surprise: 0.55,
             open_vs_smile: 0.45,
+            eye_laugh: false,
+            laugh_lo: 0.55,
+            laugh_hi: 0.95,
+            laugh_close: 1.0,
+            laugh_iris: 0.9,
         }
     }
 }
@@ -269,6 +286,11 @@ impl ExprOptions {
             mouth_override: read("COLONQ_MOUTH_OVERRIDE", d.mouth_override),
             eye_surprise: read("COLONQ_EYE_SURPRISE", d.eye_surprise),
             open_vs_smile: read("COLONQ_OPEN_VS_SMILE", d.open_vs_smile),
+            eye_laugh: utils::env_flag("COLONQ_EYE_LAUGH", d.eye_laugh),
+            laugh_lo: read("COLONQ_EYE_LAUGH_LO", d.laugh_lo),
+            laugh_hi: read("COLONQ_EYE_LAUGH_HI", d.laugh_hi),
+            laugh_close: read("COLONQ_EYE_LAUGH_CLOSE", d.laugh_close),
+            laugh_iris: read("COLONQ_EYE_LAUGH_IRIS", d.laugh_iris),
         }
     }
 }
@@ -357,7 +379,24 @@ pub fn compute_weights(f: &RawFeatures, opts: &ExprOptions) -> ExprWeights {
     );
     w.set("ih", (open_mid * wide * 0.70 * vowel_yield).min(1.0));
     w.set("ee", (open_low * wide * 0.60 * vowel_yield).min(1.0));
+
+    // 笑到眯眼（`>＜` 笑眼）：借用 relaxed / ih 两个槽位（vrm.rs 已把它们改绑到
+    // "整只眼闭上" 和 "眼珠变白" 的 morph），权重按 happy 的斜坡来 ——
+    // 小小一笑只动嘴角，笑到一定程度眼角才眯起来，这才是动画里的观感。
+    if opts.eye_laugh {
+        let t = ramp(w.get("happy"), opts.laugh_lo, opts.laugh_hi);
+        w.set("relaxed", t * opts.laugh_close);
+        w.set("ih", t * opts.laugh_iris);
+    }
     w
+}
+
+/// 线性斜坡：x<=lo 为 0，x>=hi 为 1
+fn ramp(x: f32, lo: f32, hi: f32) -> f32 {
+    if !x.is_finite() || hi <= lo {
+        return if x.is_finite() && x >= hi { 1.0 } else { 0.0 };
+    }
+    clamp01((x - lo) / (hi - lo))
 }
 
 pub struct TrackingState {
@@ -1058,6 +1097,51 @@ mod tests {
             },
         );
         assert_eq!(w0.get("surprised"), 0.0);
+    }
+
+    #[test]
+    fn eye_laugh_only_kicks_in_for_big_smiles() {
+        let opts = ExprOptions {
+            eye_laugh: true,
+            ..ExprOptions::default()
+        };
+        // 小微笑（happy≈0.1）：眼角还不该眯
+        let mut f = [0.0f32; 14];
+        f[8] = 0.35;
+        f[10] = 0.35;
+        let small = weights_with(f, &opts);
+        assert!(small.get("happy") > 0.0);
+        assert_eq!(small.get("relaxed"), 0.0, "小微笑不该眯眼: {:?}", small);
+        assert_eq!(small.get("ih"), 0.0);
+
+        // 大笑（happy=1）：眯眼拉满、眼珠变白稍弱一点
+        let mut f = [0.0f32; 14];
+        f[8] = 1.0;
+        f[10] = 1.0;
+        let big = weights_with(f, &opts);
+        assert!(big.get("happy") > 0.99);
+        assert!((big.get("relaxed") - 1.0).abs() < 1e-5, "{:?}", big);
+        assert!((big.get("ih") - 0.9).abs() < 1e-5, "{:?}", big);
+
+        // 两个强度都能单独关掉（觉得"眼睛整个没了"就把眼珠那一路调小）
+        let no_iris = weights_with(
+            f,
+            &ExprOptions {
+                eye_laugh: true,
+                laugh_iris: 0.0,
+                ..ExprOptions::default()
+            },
+        );
+        assert!((no_iris.get("relaxed") - 1.0).abs() < 1e-5);
+        assert_eq!(no_iris.get("ih"), 0.0);
+
+        // 关掉开关时这两个槽还是原来的语义（小微笑）
+        let mut f = [0.0f32; 14];
+        f[8] = 1.0;
+        f[10] = 1.0;
+        let off = weights_with(f, &ExprOptions::default());
+        assert_eq!(off.get("relaxed"), 0.0);
+        assert_eq!(off.get("ih"), 0.0);
     }
 
     #[test]

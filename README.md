@@ -130,6 +130,10 @@ VRM 模型 ──gltf 载入──> VAO/骨骼/表情属性
 | `COLONQ_EYE_SURPRISE` | `0.55` | 眼睛睁大对"惊讶"的贡献（抬眉不灵敏时的第二路信号），`0` = 只用眉毛 |
 | `COLONQ_EXPR_MAP` | 未设 | **槽位重映射**，如 `relaxed=blinkLeft`（单眼 wink）或 `ih=23`（换成一个没名字的 morph target）。顶点属性槽只有 11 个，想用模型里其余表情只能这样"换" |
 | `COLONQ_EXPR_FORCE` | 未设 | 把槽位钉死在固定权重、忽略面捕，如 `surprised=1`（**不夹取**，可以写 `2` 放大）。用来确认"这个表情在我的模型上到底长什么样" |
+| `COLONQ_EXPR_EXTRA` | 未设 | 给槽位**追加**额外 morph target（VRM 规范里一个表情可以绑多个），如 `happy=17,23:0.8;sad=16`。加载时按权重把多个 target 相加成一份缓冲区，一个槽位仍只占一个属性 |
+| `COLONQ_EYE_LAUGH` | 关 | `1` = 开启"笑到眯眼"（`>＜` 笑眼）：`relaxed` 槽改绑"整只眼闭上"的 morph、`ih` 槽改绑"眼珠变白"的 morph，权重由 happy 强度斜坡给出。**代价是 `relaxed`/`ih` 两个表情被占用** |
+| `COLONQ_EYE_LAUGH_LO` / `_HI` | `0.55` / `0.95` | 笑眼斜坡：happy 超过 `LO` 才开始眯、到 `HI` 拉满 |
+| `COLONQ_EYE_LAUGH_CLOSE` / `_IRIS` | `1.0` / `0.9` | 眯眼 / 眼珠变白的最大权重。觉得"眼睛整个没了"就把 `_IRIS` 调小或设 `0` |
 | `COLONQ_SMOOTH` | `0.5` | 面捕平滑 0~0.95（越大越平滑、延迟越高）。**延迟偏高时先降这个**：24 包/秒下 `0.5` ≈ 60 ms、`0.2` ≈ 26 ms、`0` = 不平滑。排查见 `FACE_CAPTURE.md` 第 9 节 |
 | `COLONQ_PBO` | 未设（=同步回读） | `1` 启用异步双 PBO 回读（真 GPU 上可省掉每帧等 GPU 画完的时间）；任何异常会自动退回同步，不会黑屏 |
 | `COLONQ_DUMP_PNG` | 未设 | 保存 `frame64.png`（原始）和 `frame-view.png`（字符比例视图） |

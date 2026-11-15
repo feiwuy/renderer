@@ -16,6 +16,9 @@ pub struct Primitive {
     pub material_index: usize,
 }
 
+/// 一个表情槽位要叠加的 morph target 列表：(target 下标, 权重)
+pub type MorphBinds = Vec<(u32, f32)>;
+
 #[allow(dead_code)]
 pub struct Mesh {
     pub primitives: Vec<Primitive>,
@@ -104,6 +107,62 @@ fn expr_map_overrides() -> HashMap<String, String> {
                 }
             }
             None => log::warn!("COLONQ_EXPR_MAP 里的 {:?} 不是 槽位=目标 形式", item),
+        }
+    }
+    out
+}
+
+/// 解析 `COLONQ_EXPR_EXTRA="happy=17,23:0.8;sad=16"`：给某个槽位追加额外的 morph target。
+///
+/// 语法：`槽位=目标[:权重],目标[:权重] ; 槽位=…`
+/// - 目标可以是 morph target 下标（数字）或 VRM preset 名（如 `blinkLeft`）
+/// - 权重省略按 1.0；槽位之间用 `;` 分隔
+///
+/// 语义：VRM 规范里一个 expression 可以有多个 morphTargetBinds，叠加生效
+/// （three-vrm 就是逐个累加）。本渲染器一个槽只有一份顶点属性，所以在**加载时**
+/// 用 CPU 把这些 target 的偏移按权重相加，合成一份缓冲区 —— 一个槽位上依然能
+/// 同时带好几个形变（比如"笑 + 眯眼 + 眼珠变白"）。
+fn expr_extras() -> HashMap<String, Vec<(String, f32)>> {
+    let mut out: HashMap<String, Vec<(String, f32)>> = HashMap::new();
+    let Ok(spec) = std::env::var("COLONQ_EXPR_EXTRA") else {
+        return out;
+    };
+    for item in spec.split(';') {
+        let item = item.trim();
+        if item.is_empty() {
+            continue;
+        }
+        let Some((slot, list)) = item.split_once('=') else {
+            log::warn!("COLONQ_EXPR_EXTRA 里的 {:?} 不是 槽位=目标 形式", item);
+            continue;
+        };
+        let slot = slot.trim();
+        if crate::tracking::expr_index(slot).is_none() {
+            log::warn!(
+                "COLONQ_EXPR_EXTRA 里的槽位 {:?} 不存在（可选: {}）",
+                slot,
+                crate::tracking::EXPR_NAMES.join("/")
+            );
+            continue;
+        }
+        for bind in list.split(',') {
+            let bind = bind.trim();
+            if bind.is_empty() {
+                continue;
+            }
+            let (target, weight) = match bind.split_once(':') {
+                Some((t, w)) => match w.trim().parse::<f32>() {
+                    Ok(v) => (t.trim().to_string(), v),
+                    Err(_) => {
+                        log::warn!("COLONQ_EXPR_EXTRA 里的权重 {:?} 不是数字", w);
+                        continue;
+                    }
+                },
+                None => (bind.to_string(), 1.0),
+            };
+            out.entry(slot.to_string())
+                .or_default()
+                .push((target, weight));
         }
     }
     out
@@ -279,9 +338,30 @@ impl Scene {
         //   也可以是**morph target 下标**（数字，指脸 mesh 的第 N 个 target）。
         //   用途：顶点属性槽只有 11 个且已经用满，靠重映射才能用上模型里其余的表情
         //   （比如把用不上的 relaxed 换成 blinkLeft 做单眼 wink，或换成那 13 个无名 target）。
-        let overrides = expr_map_overrides();
+        let mut overrides = expr_map_overrides();
+        // 追加 bind：COLONQ_EXPR_EXTRA="happy=17:1,23:0.8"
+        //   VRM 规范允许一个 expression 有多个 morphTargetBinds（three-vrm 就是逐个累加），
+        //   本渲染器只有一个属性槽可用，所以在**加载时**用 CPU 把多个 target 按权重相加
+        //   合成一个缓冲区 —— 一个 expression 仍然只占一个槽，但可以带上多个形变。
+        let extras = expr_extras();
+        // 一步到位试"笑到眯眼"（VToid/动画常见的 >＜ 笑眼）：
+        //   COLONQ_EYE_LAUGH=1 → relaxed 槽改绑 17（整只眼闭上）、ih 槽改绑 23（眼珠变白），
+        //   权重由 tracking.rs 按 happy 强度斜坡给出（见 ExprOptions::eye_laugh）。
+        //   依据 VRM 1.0 的程序化表情组规范：Mouth 组在笑的时候要让位，
+        //   Blink 组则可以用 overrideBlink 抑制，这里用两个空闲槽位做"派生表情"。
+        if crate::tracking::ExprOptions::from_env().eye_laugh {
+            overrides
+                .entry("relaxed".to_string())
+                .or_insert_with(|| "17".to_string());
+            overrides
+                .entry("ih".to_string())
+                .or_insert_with(|| "23".to_string());
+        }
         if !overrides.is_empty() {
             log::info!("表情槽重映射: {:?}", overrides);
+        }
+        if !extras.is_empty() {
+            log::info!("表情追加 bind: {:?}", extras);
         }
         // 数字下标要用到的"脸节点"：取任意一个 preset 绑定的 node（本项目的卡通脸只有一个）
         let face_node = vrm
@@ -292,30 +372,64 @@ impl Scene {
             .next();
 
         // 只挂载模型里真实存在的表情；缺失的就不绑属性（对应 uniform 位置为 -1，上传时自动失效）
-        let expressions: HashMap<String, (u32, gltf::Mesh, gl::types::GLuint)> = ctx
+        // 值 = 该槽要叠加的 (morph target 下标, 权重) 列表
+        let expressions: HashMap<String, (MorphBinds, gltf::Mesh, gl::types::GLuint)> = ctx
             .attrib_expressions
             .iter()
             .filter_map(|(slot, attrib)| {
                 let want = overrides.get(slot).map(|s| s.as_str()).unwrap_or(slot);
-                let (node, index) = if let Some(preset) = vrm.expressions.preset.get(want) {
-                    let b = preset.morph_target_binds.first()?;
-                    (b.node, b.index)
-                } else if let Ok(idx) = want.parse::<u32>() {
-                    (face_node?, idx)
-                } else {
-                    log::warn!(
-                        "表情槽 {} 指向 {:?}：既不是 VRM preset 名，也不是 morph target 下标",
-                        slot,
-                        want
-                    );
+                // 一个 expression 可能声明多个 bind（VRM 规范允许，three-vrm 会逐个累加）
+                let (node, mut binds): (u32, MorphBinds) =
+                    if let Some(preset) = vrm.expressions.preset.get(want) {
+                        let first = preset.morph_target_binds.first()?;
+                        (
+                            first.node,
+                            preset
+                                .morph_target_binds
+                                .iter()
+                                .map(|b| (b.index, b.weight))
+                                .collect(),
+                        )
+                    } else if let Ok(idx) = want.parse::<u32>() {
+                        (face_node?, vec![(idx, 1.0)])
+                    } else {
+                        log::warn!(
+                            "表情槽 {} 指向 {:?}：既不是 VRM preset 名，也不是 morph target 下标",
+                            slot,
+                            want
+                        );
+                        return None;
+                    };
+                // 追加的额外 bind（token 可以是下标或 preset 名）
+                if let Some(extra) = extras.get(slot) {
+                    for (target, weight) in extra {
+                        match target.parse::<u32>() {
+                            Ok(idx) => binds.push((idx, *weight)),
+                            Err(_) => match vrm.expressions.preset.get(target.as_str()) {
+                                Some(preset) => match preset.morph_target_binds.first() {
+                                    Some(b) => binds.push((b.index, *weight)),
+                                    None => log::warn!(
+                                        "COLONQ_EXPR_EXTRA: preset {:?} 没有 morph target",
+                                        target
+                                    ),
+                                },
+                                None => log::warn!(
+                                    "COLONQ_EXPR_EXTRA: {:?} 既不是下标也不是 preset 名",
+                                    target
+                                ),
+                            },
+                        }
+                    }
+                }
+                if binds.is_empty() {
                     return None;
-                };
+                }
                 let mesh = gltf.nodes().nth(node as _)?.mesh()?;
                 if *attrib > 15 {
                     log::warn!("表情槽 {} 的属性位置 {} 超出 0..15，已跳过", slot, attrib);
                     return None;
                 }
-                Some((slot.clone(), (index, mesh, *attrib)))
+                Some((slot.clone(), (binds, mesh, *attrib)))
             })
             .collect();
         for missing in ctx
@@ -483,9 +597,13 @@ impl Scene {
                                 }
                             }
 
-                            for (target_index, mesh, attrib) in expressions.values() {
-                                if m.index() == mesh.index() {
-                                    match p.morph_targets().nth(*target_index as _) {
+                            for (binds, mesh, attrib) in expressions.values() {
+                                if m.index() != mesh.index() {
+                                    continue;
+                                }
+                                // 单个 bind、权重 1：直接把属性指到原来的 accessor（零拷贝，原路径）
+                                if binds.len() == 1 && (binds[0].1 - 1.0).abs() < 1e-6 {
+                                    match p.morph_targets().nth(binds[0].0 as _) {
                                         Some(target) => match target.positions() {
                                             Some(pos) => {
                                                 Self::initialize_attrib(*attrib, &pos, &bufs);
@@ -494,16 +612,84 @@ impl Scene {
                                             None => log::debug!(
                                                 "mesh {} 图元里的 target {} 没有 POSITION 偏移",
                                                 m.index(),
-                                                target_index
+                                                binds[0].0
                                             ),
                                         },
                                         None => log::debug!(
                                             "mesh {} 的图元没有第 {} 个 morph target",
                                             m.index(),
-                                            target_index
+                                            binds[0].0
                                         ),
                                     }
+                                    continue;
                                 }
+                                // 多个 bind：VRM 规范里一个 expression 可以绑多个 morph target，
+                                // 这里是"叠加"语义，在加载时用 CPU 按权重相加成一份缓冲区上传。
+                                let count = p
+                                    .get(&gltf::Semantic::Positions)
+                                    .map(|a| a.count())
+                                    .unwrap_or(0);
+                                if count == 0 {
+                                    continue;
+                                }
+                                let mut acc = vec![0.0f32; count * 3];
+                                let get_data = |buffer: gltf::Buffer| {
+                                    bufs.get(buffer.index()).map(|x| &*x.1 .0)
+                                };
+                                let mut ok = true;
+                                for (idx, w) in binds.iter() {
+                                    let Some(target) = p.morph_targets().nth(*idx as _) else {
+                                        ok = false;
+                                        break;
+                                    };
+                                    let Some(pos) = target.positions() else {
+                                        continue;
+                                    };
+                                    let Some(iter) =
+                                        gltf::accessor::Iter::<[f32; 3]>::new(pos, get_data)
+                                    else {
+                                        continue;
+                                    };
+                                    for (i, v) in iter.enumerate().take(count) {
+                                        acc[i * 3] += v[0] * w;
+                                        acc[i * 3 + 1] += v[1] * w;
+                                        acc[i * 3 + 2] += v[2] * w;
+                                    }
+                                }
+                                if !ok {
+                                    log::warn!(
+                                        "属性 {} 的 bind 列表里有不存在的 morph target，已跳过",
+                                        attrib
+                                    );
+                                    continue;
+                                }
+                                {
+                                    let mut gbuf: gl::types::GLuint = 0;
+                                    gl::GenBuffers(1, &mut gbuf as *mut gl::types::GLuint);
+                                    gl::BindBuffer(gl::ARRAY_BUFFER, gbuf);
+                                    gl::BufferData(
+                                        gl::ARRAY_BUFFER,
+                                        (acc.len() * std::mem::size_of::<f32>()) as _,
+                                        acc.as_ptr() as *const std::ffi::c_void,
+                                        gl::STATIC_DRAW,
+                                    );
+                                    gl::VertexAttribPointer(
+                                        *attrib,
+                                        3,
+                                        gl::FLOAT,
+                                        false as u8,
+                                        0,
+                                        std::ptr::null(),
+                                    );
+                                    gl::EnableVertexAttribArray(*attrib);
+                                }
+                                log::debug!(
+                                    "属性 {}: 合成 {} 个 morph bind（{} 顶点）",
+                                    attrib,
+                                    binds.len(),
+                                    count
+                                );
+                                bound.push(*attrib);
                             }
                             if !bound.is_empty() {
                                 log::debug!(

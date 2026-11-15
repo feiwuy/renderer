@@ -329,3 +329,42 @@ set -x COLONQ_EXPR_FORCE "happy=1"
 44~56 那 13 个可以直接放弃。
 
 （生成对照图：`sh tools/morph_sheet.sh 17 23 14 15`；量化对比可以用 `COLONQ_EXPR_FORCE` + 逐像素 diff。）
+
+### 「笑到眯眼」与 VRM 规范的多 bind
+
+VRM 1.0 把自动生成权重的表情分成三个**程序化组**（[官方文档](https://vrm.dev/univrm1/vrm1_tutorial/expression/)）：
+
+| 组 | 包含的 preset |
+|---|---|
+| Blink | `blink` / `blinkLeft` / `blinkRight` |
+| LookAt | `lookUp` / `lookDown` / `lookLeft` / `lookRight` |
+| Mouth | `aa` / `ih` / `ou` / `ee` / `oh` |
+
+并给每个表情三个覆盖开关 `overrideBlink` / `overrideMouth` / `overrideLookAt`，取值 `none` / `block` / `blend`。
+官方文档举的组合事故例子，正好就是本项目踩到的两个：
+
+> 激活 happy 的同时触发 aa → 两个表情都让嘴张开，叠加后嘴张得过大，很奇怪
+> 激活 sad 的同时触发 blink → 两个表情都在动眼睑，眼睑会穿过脸颊
+
+本分支的处理：
+
+- **Mouth 组让位**：`COLONQ_MOUTH_OVERRIDE`（默认 0.7）等价于把 `happy` 的 `overrideMouth` 设成 `blend`
+- **张嘴不误判成笑**：`COLONQ_OPEN_VS_SMILE`（默认 0.45），这是特征层面的反向解耦
+- **一个表情绑多个 morph target**（规范允许，three-vrm 是逐个累加）：本渲染器只有一个属性槽，
+  所以在**加载时**用 CPU 把多个 target 的偏移按权重相加成一份缓冲区。
+  模型自带的多 bind 会自动支持；也可以用 `COLONQ_EXPR_EXTRA="happy=17,23:0.8"` 追加。
+
+「笑到眯眼」就是从这来的：VRoid 的 `Fcl_EYE_Close` / `Fcl_EYE_Joy` 一类 morph
+在本模型里是 target **17**（整只眼闭上）和 **23**（眼珠变白）。打开开关后：
+
+```fish
+set -x COLONQ_EYE_LAUGH 1
+./run-obs.sh
+```
+
+- `relaxed` 槽 → target 17，权重 = 斜坡(happy, 0.55 → 0.95)
+- `ih` 槽 → target 23，权重 = 同一斜坡 × 0.9
+
+也就是说**小微笑只动嘴角，笑到 55% 以上眼角才开始眯**，完全眯起来是 happy≈0.95。
+觉得“眼睛整个没了”就 `COLONQ_EYE_LAUGH_IRIS=0.4` 或 `0`；
+不想要眯眼就 `COLONQ_EYE_LAUGH_CLOSE=0`。斜坡用 `COLONQ_EYE_LAUGH_LO/_HI` 调。
