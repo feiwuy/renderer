@@ -1,3 +1,6 @@
+// 上游遗留功能（OBJ 网格 / 贴图 / 帽子 / 南瓜），本分支的渲染路径没有用到；
+// 保留代码以便将来复用，因此整体允许 dead_code。
+#![allow(dead_code)]
 use std::f32::consts::PI;
 
 use crate::{context, gl, mesh, shader, texture};
@@ -13,7 +16,7 @@ impl Hat {
     pub fn cone(ctx: &context::Context) -> Self {
         Self {
             shader: shader::Shader::new(
-                &ctx,
+                ctx,
                 "../assets/shadercone.vert",
                 "../assets/shadercone.frag",
                 64,
@@ -35,9 +38,9 @@ impl Hat {
         view: &glam::Mat4,
         projection: &glam::Mat4,
         avatar: &super::Avatar,
-        global_transforms: &Vec<glam::Mat4>,
+        global_transforms: &[glam::Mat4],
     ) {
-        self.shader.bind(&ctx);
+        self.shader.bind(ctx);
         unsafe {
             gl::UniformMatrix4fv(
                 self.shader.uniform_view,
@@ -94,7 +97,7 @@ impl Pumpkin {
     pub fn new(ctx: &context::Context) -> Self {
         Self {
             shader: shader::Shader::new(
-                &ctx,
+                ctx,
                 "../assets/shaderpumpkin.vert",
                 "../assets/shaderpumpkin.frag",
                 64,
@@ -102,7 +105,7 @@ impl Pumpkin {
             ),
             mesh: mesh::Mesh::new(std::path::Path::new("../assets/cube.obj")).unwrap(),
             texture: Some(texture::Texture::new(
-                &ctx,
+                ctx,
                 "/home/llll/src/pumpkin/table/pumpkin.png",
             )),
             position: glam::Mat4::from_scale_rotation_translation(
@@ -131,9 +134,9 @@ impl Pumpkin {
         view: &glam::Mat4,
         projection: &glam::Mat4,
         avatar: &super::Avatar,
-        global_transforms: &Vec<glam::Mat4>,
+        global_transforms: &[glam::Mat4],
     ) {
-        self.shader.bind(&ctx);
+        self.shader.bind(ctx);
         unsafe {
             gl::UniformMatrix4fv(
                 self.shader.uniform_view,

@@ -309,7 +309,7 @@ fn render_loop(
     // 终端字符宽高约 1:2，所以正方形的世界视野需要横向多一倍像素
     let fb_projection = glam::Mat4::perspective_lh(
         std::f32::consts::PI / 4.0,
-        (fb.dims.w as f32 * 0.5) / fb.dims.h as f32,
+        (fb.dims.w * 0.5) / fb.dims.h,
         0.1,
         10.0,
     );
@@ -429,11 +429,8 @@ fn render_loop(
 
         for _ in 0..steps {
             for event in event_pump.poll_iter() {
-                match event {
-                    sdl2::event::Event::Quit { .. } => {
-                        break 'mainloop;
-                    }
-                    _ => (),
+                if let sdl2::event::Event::Quit { .. } = event {
+                    break 'mainloop;
                 }
             }
 
@@ -487,7 +484,7 @@ fn render_loop(
             }
 
             // render framebuffer to terminal
-            framecount = framecount + 1;
+            framecount += 1;
             float_time = anim_start.elapsed().as_secs_f32();
 
             if framecount == 1000 {
@@ -630,8 +627,8 @@ fn render_loop(
                 let st = tracking_state.lock().unwrap();
                 shader
                     .uniform_expressions
-                    .iter()
-                    .map(|(name, _)| *st.expression_weights.get(name).unwrap_or(&0.0))
+                    .keys()
+                    .map(|name| *st.expression_weights.get(name).unwrap_or(&0.0))
                     .collect()
             };
             for ((enm, uniform), raw) in shader.uniform_expressions.iter().zip(expr_snapshot) {
@@ -690,7 +687,7 @@ fn render_loop(
             fb.render_term(
                 &ctx,
                 framecount,
-                &mut players,
+                &players,
                 &control.0.lock().unwrap().palette,
                 term,
                 term_counter,

@@ -28,7 +28,7 @@ pub fn smooth_alpha(smooth: f32, dt: f32, nominal_dt: f32) -> f32 {
     if s <= 0.001 {
         return 1.0; // 关闭平滑
     }
-    if !(dt > 0.0) {
+    if !dt.is_finite() || dt <= 0.0 {
         return 1.0 - s; // dt 不可用（首包/时钟异常）时退回旧公式
     }
     let reference = if nominal_dt > 0.001 {
@@ -107,6 +107,8 @@ impl TrackingState {
 }
 
 /// 解析单脸数据包并写入共享状态；返回 false 表示包无效（长度/数值异常）
+// 参数多是有意的：这是接收线程里每条包都要走的热路径，拆成结构体会引入额外拷贝
+#[allow(clippy::too_many_arguments)]
 fn parse_packet(
     buf: &[u8],
     sts: &SharedTrackingState,
@@ -120,7 +122,7 @@ fn parse_packet(
     pitch_flip: bool,
     smooth: f32,
 ) -> bool {
-    if buf.len() < PACKET_LEN || buf.len() % PACKET_LEN != 0 {
+    if buf.len() < PACKET_LEN || !buf.len().is_multiple_of(PACKET_LEN) {
         return false; // 多脸包按 1785 的整数倍拼接；只取第一张脸
     }
     let left_blinking = byteorder::LittleEndian::read_f32(&buf[BLINK_OFFSET..]);
@@ -145,7 +147,7 @@ fn parse_packet(
     }
     // COLONQ_TRACK_DEBUG=1：打印收到的原始数值（前 3 个包 + 之后每 100 个），
     // 用来确认"包到底有没有到""数值合不合理"
-    if diag && (counter <= 3 || counter % 100 == 0) {
+    if diag && (counter <= 3 || counter.is_multiple_of(100)) {
         log::info!(
             "面捕包 #{}: blink L/R={:.3}/{:.3} mouth={:.3} quat=({:.3},{:.3},{:.3},{:.3})",
             counter,
@@ -206,7 +208,7 @@ fn parse_packet(
     }
     let alpha = smooth_alpha(smooth, dt, state.nominal_dt);
     // 每 300 个包报告一次实测包率 + 平滑折算出的延迟，方便判断延迟来源
-    if counter % 300 == 0 && state.nominal_dt > 0.001 {
+    if counter.is_multiple_of(300) && state.nominal_dt > 0.001 {
         let steady_alpha = 1.0 - smooth.clamp(0.0, 0.95);
         // 一阶指数平滑的时间常数 τ = -dt / ln(1 - alpha)，可粗略看作引入的延迟
         let tau_ms = if steady_alpha >= 0.999 {

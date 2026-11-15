@@ -49,11 +49,7 @@ impl Control {
     }
 
     pub fn is(&self, prop: &str) -> bool {
-        if self.get(prop) == 0 {
-            false
-        } else {
-            true
-        }
+        self.get(prop) != 0
     }
 
     pub fn run(self, command_sender: Sender<ControlCommand>) {

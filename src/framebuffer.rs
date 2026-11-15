@@ -171,6 +171,7 @@ impl Framebuffer {
     }
 
     /// 网格尺寸变化时重建 FBO（旧的 GL 对象直接丢弃，resize 不常发生）
+    #[allow(dead_code)]
     pub fn resize(&mut self, ctx: &context::Context, w: i32, h: i32) {
         if self.dims.w == w as f32 && self.dims.h == h as f32 {
             return;
@@ -235,29 +236,29 @@ impl Framebuffer {
 
     pub fn get_surrounding(&self, bg: (i32, i32, i32), x: i32, y: i32) -> u8 {
         let mut ret = 0;
-        if let Some(_) = self.get_pixel(bg, x - 1, y - 1) {
-            ret = ret | 0b10000000
+        if self.get_pixel(bg, x - 1, y - 1).is_some() {
+            ret |= 0b10000000
         }
-        if let Some(_) = self.get_pixel(bg, x - 1, y + 0) {
-            ret = ret | 0b01000000
+        if self.get_pixel(bg, x - 1, y).is_some() {
+            ret |= 0b01000000
         }
-        if let Some(_) = self.get_pixel(bg, x - 1, y + 1) {
-            ret = ret | 0b00100000
+        if self.get_pixel(bg, x - 1, y + 1).is_some() {
+            ret |= 0b00100000
         }
-        if let Some(_) = self.get_pixel(bg, x + 0, y - 1) {
-            ret = ret | 0b00010000
+        if self.get_pixel(bg, x, y - 1).is_some() {
+            ret |= 0b00010000
         }
-        if let Some(_) = self.get_pixel(bg, x + 0, y + 1) {
-            ret = ret | 0b00001000
+        if self.get_pixel(bg, x, y + 1).is_some() {
+            ret |= 0b00001000
         }
-        if let Some(_) = self.get_pixel(bg, x + 1, y - 1) {
-            ret = ret | 0b00000100
+        if self.get_pixel(bg, x + 1, y - 1).is_some() {
+            ret |= 0b00000100
         }
-        if let Some(_) = self.get_pixel(bg, x + 1, y + 0) {
-            ret = ret | 0b00000010
+        if self.get_pixel(bg, x + 1, y).is_some() {
+            ret |= 0b00000010
         }
-        if let Some(_) = self.get_pixel(bg, x + 1, y + 1) {
-            ret = ret | 0b00000001
+        if self.get_pixel(bg, x + 1, y + 1).is_some() {
+            ret |= 0b00000001
         }
         ret
     }
@@ -419,30 +420,28 @@ impl Framebuffer {
                             avatar::PaletteEntry::Video => context::PaletteType::from_color(col)
                                 .as_ref()
                                 .and_then(|pty| players.players.get(pty))
-                                .and_then(|player| Some(player.get_pixel(x, y)))
+                                .map(|player| player.get_pixel(x, y))
                                 .unwrap_or(col),
                         };
 
                         let wordlen = wordref.chars().count();
                         let mut c1 = wordref.chars().nth(idx % wordlen).unwrap();
                         // emoji 查表带一次 String 分配，逐格做很贵；这里按字符缓存
-                        let mut is_emoji = *emoji_cache
+                        let is_emoji = *emoji_cache
                             .entry(c1)
                             .or_insert_with(|| emojis::get(&format!("{}", c1)).is_some());
-                        idx = idx + 1;
+                        idx += 1;
                         // 一格只有一个字符了，c2 只给边缘图案当占位用
                         let mut c2 = ' ';
 
                         let s = self.get_surrounding(ctx.bgcolor, x, y);
                         if s == 0b01101011 || s == 0b01101111 {
                             c1 = '|';
-                            is_emoji = false;
                         } else if is_left_edge_bar(s) {
                             if is_emoji {
                                 c1 = '.';
                             }
                             c2 = '|';
-                            is_emoji = false;
                         } else if s == 0b00101011
                             || s == 0b00101111
                             || s == 0b00101110
@@ -451,7 +450,6 @@ impl Framebuffer {
                         {
                             c1 = ' ';
                             c2 = '/';
-                            is_emoji = false;
                         } else if s == 0b10010110
                             || s == 0b10010111
                             || s == 0b10010011
@@ -460,31 +458,24 @@ impl Framebuffer {
                         {
                             c1 = '\\';
                             c2 = ' ';
-                            is_emoji = false;
                         } else if s == 0b00111111 {
                             c1 = '-';
                             c2 = '/';
-                            is_emoji = false;
                         } else if s == 0b10011111 {
                             c1 = '\\';
                             c2 = '-';
-                            is_emoji = false;
                         } else if s == 0b00011111 {
                             c1 = '-';
                             c2 = '-';
-                            is_emoji = false;
                         } else if s == 0b00001111 {
                             c1 = ' ';
                             c2 = '_';
-                            is_emoji = false;
                         } else if s == 0b00010111 {
                             c1 = '_';
                             c2 = ' ';
-                            is_emoji = false;
                         } else if s == 0b00000111 {
                             c1 = '_';
                             c2 = '_';
-                            is_emoji = false;
                         }
 
                         // 现在是一个像素对一个字符（128 列），
@@ -493,7 +484,7 @@ impl Framebuffer {
                         t.write(y as _, x as _, custom, ch, None, (r, g, b));
                     }
                     None => {
-                        idx = idx + 1;
+                        idx += 1;
                         t.write(y as _, x as _, false, ' ', None, (0, 0, 0));
                     }
                 }
@@ -501,6 +492,7 @@ impl Framebuffer {
         }
     }
 
+    #[allow(dead_code)]
     pub fn render_ascii(
         &mut self,
         ctx: &context::Context,
@@ -575,7 +567,7 @@ impl Framebuffer {
                                     context::PaletteType::from_color(col)
                                         .as_ref()
                                         .and_then(|pty| players.players.get(pty))
-                                        .and_then(|player| Some(player.get_pixel(x, y)))
+                                        .map(|player| player.get_pixel(x, y))
                                         .unwrap_or(col)
                                 }
                             };
@@ -583,12 +575,12 @@ impl Framebuffer {
                             let wordlen = wordref.chars().count();
                             let mut c1 = wordref.chars().nth(idx % wordlen).unwrap();
                             let mut is_emoji = emojis::get(&format!("{}", c1)).is_some();
-                            idx = idx + 1;
+                            idx += 1;
                             let mut c2 = wordref.chars().nth(idx % wordlen).unwrap();
                             if emojis::get(&format!("{}", c2)).is_some() {
                                 c2 = '.';
                             }
-                            idx = idx + 1;
+                            idx += 1;
 
                             let s = self.get_surrounding(ctx.bgcolor, x, y);
                             if s == 0b01101011 || s == 0b01101111 {
@@ -665,7 +657,7 @@ impl Framebuffer {
                             }
                         }
                         None => {
-                            idx = idx + 1;
+                            idx += 1;
                             write!(output, "{}", "  ".to_owned().on_custom_color(bg)).unwrap();
                         }
                     }
@@ -676,6 +668,7 @@ impl Framebuffer {
         }
     }
 
+    #[allow(dead_code)]
     pub fn render_ascii_classic(&mut self, ctx: &context::Context, framecount: i32, word: &String) {
         let mut stdout = std::io::stdout().into_raw_mode().unwrap();
 
@@ -713,12 +706,12 @@ impl Framebuffer {
                             let wordlen = wordref.chars().count();
                             let mut c1 = wordref.chars().nth(idx % wordlen).unwrap();
                             let mut is_emoji = emojis::get(&format!("{}", c1)).is_some();
-                            idx = idx + 1;
+                            idx += 1;
                             let mut c2 = wordref.chars().nth(idx % wordlen).unwrap();
                             if emojis::get(&format!("{}", c2)).is_some() {
                                 c2 = '.';
                             }
-                            idx = idx + 1;
+                            idx += 1;
 
                             let s = self.get_surrounding(ctx.bgcolor, x, y);
                             if s == 0b01101011 || s == 0b01101111 {
@@ -795,7 +788,7 @@ impl Framebuffer {
                             }
                         }
                         None => {
-                            idx = idx + 1;
+                            idx += 1;
                             write!(stdout, "  ").unwrap();
                         }
                     }
@@ -805,10 +798,11 @@ impl Framebuffer {
         }
     }
 
+    #[allow(dead_code)]
     pub fn render_ascii_shadow(&mut self, ctx: &context::Context, framecount: i32) {
         let mut stdout = std::io::stdout().into_raw_mode().unwrap();
         let pixels_len = (self.dims.w * self.dims.h * 4.0) as _;
-        let mut pixels = vec![0; pixels_len];
+        let _pixels = vec![0; pixels_len];
         let word = "hcolonw".to_owned();
         let eyeword = "ISEEYOU".to_owned();
 
@@ -827,16 +821,16 @@ impl Framebuffer {
                             };
 
                             let wordlen = wordref.chars().count();
-                            let mut c1 = wordref.chars().nth(idx % wordlen).unwrap();
-                            idx = idx + 1;
-                            let mut c2 = wordref.chars().nth(idx % wordlen).unwrap();
-                            idx = idx + 1;
+                            let c1 = wordref.chars().nth(idx % wordlen).unwrap();
+                            idx += 1;
+                            let c2 = wordref.chars().nth(idx % wordlen).unwrap();
+                            idx += 1;
 
                             write!(stdout, "{}", format!("{}{}", c1, c2).truecolor(nr, ng, nb))
                                 .unwrap();
                         }
                         None => {
-                            idx = idx + 1;
+                            idx += 1;
                             write!(stdout, "  ").unwrap();
                         }
                     }

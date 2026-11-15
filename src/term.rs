@@ -1,7 +1,10 @@
 use byteorder::WriteBytesExt;
-use colored::Colorize;
 use std::io::Write;
 
+/// 一帧 ASCII 画面：每格 (字符, RGB)。渲染线程 → 推流服务之间用它传数据
+pub type Cells = Vec<Vec<(char, (u8, u8, u8))>>;
+
+#[allow(dead_code)]
 fn choose_glyph(custom: bool, g: char, v: f32) -> char {
     if custom {
         return g;
@@ -128,6 +131,7 @@ impl Term {
     }
 
     /// 终端尺寸变化时重建网格（不换对象，方便上层拿着 &mut 引用）
+    #[allow(dead_code)]
     pub fn resize(&mut self, w: usize, h: usize) {
         if self.w == w && self.h == h {
             return;
@@ -226,7 +230,7 @@ impl Term {
     }
 
     /// 导出当前帧的字符快照，给本地推流服务用
-    pub fn snapshot(&self) -> Vec<Vec<(char, (u8, u8, u8))>> {
+    pub fn snapshot(&self) -> Cells {
         self.cells
             .iter()
             .map(|row| {
@@ -240,6 +244,7 @@ impl Term {
             .collect()
     }
 
+    #[allow(dead_code)]
     pub fn render_stream<W>(&self, out: &mut W, bg: (u8, u8, u8))
     where
         W: Write,
@@ -248,6 +253,7 @@ impl Term {
         out.write_all(&buf).unwrap();
     }
 
+    #[allow(dead_code)]
     pub fn render_stream_nocolor<W>(&self, out: &mut W)
     where
         W: Write,
@@ -286,6 +292,7 @@ impl Term {
         out.write_all(&output).unwrap();
     }
 
+    #[allow(dead_code)]
     pub fn render_stream_nocolor_small<W>(&self, out: &mut W)
     where
         W: Write,

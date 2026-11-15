@@ -164,8 +164,8 @@ impl Shader {
 
             let uniform_expressions = ctx
                 .attrib_expressions
-                .iter()
-                .map(|(enm, _)| {
+                .keys()
+                .map(|enm| {
                     (
                         enm.clone(),
                         gl::GetUniformLocation(

@@ -1,3 +1,6 @@
+// vendored 第三方代码：内容保持与上游一致，这里只压掉 lint 噪音，
+// 好让 `cargo clippy -- -D warnings` 能真正约束我们自己的 src/。
+#![allow(unknown_lints, mismatched_lifetime_syntaxes, unused_must_use, deprecated, unreachable_pattern, clippy::all)]
 #![deny(missing_docs)]
 #![allow(unknown_lints)]
 #![cfg_attr(docsrs, feature(doc_cfg))]

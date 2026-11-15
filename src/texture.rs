@@ -1,3 +1,6 @@
+// 上游遗留功能（OBJ 网格 / 贴图 / 帽子 / 南瓜），本分支的渲染路径没有用到；
+// 保留代码以便将来复用，因此整体允许 dead_code。
+#![allow(dead_code)]
 use crate::{context, gl};
 
 pub struct Texture {

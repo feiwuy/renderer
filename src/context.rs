@@ -1,6 +1,6 @@
 use crate::{framebuffer, gl, utils};
 
-use std::{cell::RefCell, collections::HashMap, env};
+use std::{collections::HashMap, env};
 
 use colors_transform::{Color, Rgb};
 
@@ -27,13 +27,13 @@ impl PaletteType {
         }
     }
     pub fn from_color((r, g, b): (u8, u8, u8)) -> Option<Self> {
-        if r >= 186 && r <= 188 && g >= 176 && g <= 178 && b >= 189 && b <= 191 {
+        if (186..=188).contains(&r) && (176..=178).contains(&g) && (189..=191).contains(&b) {
             Some(Self::Hair)
-        } else if r >= 158 && r <= 162 && g >= 148 && g <= 152 && b >= 159 && b <= 162 {
+        } else if (158..=162).contains(&r) && (148..=152).contains(&g) && (159..=162).contains(&b) {
             Some(Self::Highlight)
         } else if g > r && g > b {
             Some(Self::Eyes)
-        } else if r >= 242 && r <= 246 && g >= 238 && g <= 242 && b >= 234 && b <= 238 {
+        } else if (242..=246).contains(&r) && (238..=242).contains(&g) && (234..=238).contains(&b) {
             Some(Self::Skin)
         } else if r == 182 && g == 142 && b == 139 {
             Some(Self::Eyebags)
@@ -49,6 +49,8 @@ pub struct VideoPlayer<'a> {
     pub fb: framebuffer::Framebuffer,
     pub mpv: &'a libmpv::Mpv,
     pub mpv_render_context: libmpv::render::RenderContext,
+    /// 只为把 EventContext 的生命周期绑定在 VideoPlayer 上，代码里不直接读它
+    #[allow(dead_code)]
     pub mpv_event_context: libmpv::events::EventContext<'a>,
 }
 
@@ -95,7 +97,7 @@ impl<'a> VideoPlayer<'a> {
             }
         };
         let mpv_event_context = mpv.create_event_context();
-        let fb = framebuffer::Framebuffer::new(&ctx, false, (114, 64), (0, 0));
+        let fb = framebuffer::Framebuffer::new(ctx, false, (114, 64), (0, 0));
 
         Some(Self {
             fb,
@@ -106,7 +108,7 @@ impl<'a> VideoPlayer<'a> {
     }
 
     pub fn update(&mut self, ctx: &Context) {
-        self.fb.bind(&ctx);
+        self.fb.bind(ctx);
         self.mpv_render_context
             .render::<i32>(
                 self.fb.fbo as _,

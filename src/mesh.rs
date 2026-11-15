@@ -1,4 +1,6 @@
-use std::convert::TryInto;
+// 上游遗留功能（OBJ 网格 / 贴图 / 帽子 / 南瓜），本分支的渲染路径没有用到；
+// 保留代码以便将来复用，因此整体允许 dead_code。
+#![allow(dead_code)]
 use std::{ffi::c_void, path::Path};
 
 use crate::gl;
@@ -33,7 +35,7 @@ impl Mesh {
                 gl::FLOAT,
                 false as u8,
                 0,
-                0 as *const c_void,
+                std::ptr::null::<c_void>(),
             );
             gl::EnableVertexAttribArray(utils::ATTRIB_VERTEX);
 
@@ -53,7 +55,7 @@ impl Mesh {
                 gl::FLOAT,
                 false as u8,
                 0,
-                0 as *const c_void,
+                std::ptr::null::<c_void>(),
             );
             gl::EnableVertexAttribArray(utils::ATTRIB_NORMAL);
 
@@ -73,7 +75,7 @@ impl Mesh {
                 gl::FLOAT,
                 false as u8,
                 0,
-                0 as *const c_void,
+                std::ptr::null::<c_void>(),
             );
             gl::EnableVertexAttribArray(utils::ATTRIB_TEXCOORD);
 
@@ -109,7 +111,7 @@ impl Mesh {
                 gl::TRIANGLES,
                 self.mesh.indices.len() as i32,
                 gl::UNSIGNED_INT,
-                0 as *const c_void,
+                std::ptr::null::<c_void>(),
             );
         }
     }

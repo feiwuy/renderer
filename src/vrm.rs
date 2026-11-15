@@ -215,10 +215,7 @@ impl Scene {
                     accessor.dimensions().multiplicity() as _,
                     data_type,
                     accessor.normalized() as _,
-                    match view.stride() {
-                        Some(s) => s,
-                        _ => 0,
-                    } as _,
+                    view.stride().unwrap_or_default() as _,
                     view.offset() as _,
                 );
                 gl::EnableVertexAttribArray(attrib);
@@ -427,7 +424,7 @@ impl Scene {
                                 }
                             }
 
-                            for (_enm, (expr, mesh, attrib)) in &expressions {
+                            for (expr, mesh, attrib) in expressions.values() {
                                 if m.index() == mesh.index() {
                                     if let Some(target) = p.morph_targets().nth(expr.index as _) {
                                         if let Some(pos) = target.positions() {
@@ -612,7 +609,7 @@ impl Scene {
     ) -> Vec<glam::Mat4> {
         let mut global_transforms = vec![glam::Mat4::IDENTITY; self.nodes.len()];
         for ni in &self.scene_node_indices {
-            self.compute_global_transforms_from(&mut global_transforms, &nodes, &mat, *ni);
+            self.compute_global_transforms_from(&mut global_transforms, nodes, mat, *ni);
         }
         global_transforms
     }
@@ -678,8 +675,7 @@ impl Scene {
                         false as u8,
                         joint_matrices
                             .iter()
-                            .map(|m| m.to_cols_array())
-                            .flatten()
+                            .flat_map(|m| m.to_cols_array())
                             .collect::<Vec<f32>>()
                             .as_ptr(),
                     );

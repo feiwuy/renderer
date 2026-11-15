@@ -42,11 +42,12 @@ impl PaletteEntry {
                     delay = num / (denom * 17);
                     let bytes = f.buffer().clone().into_raw();
                     let pixels = bytes
-                        .chunks_exact(4)
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
                         .map(|c| match c {
                             [_, _, _, 0] => (0, 0, 0),
                             [r, g, b, _] => (*r, *g, *b),
-                            _ => (0, 0, 0),
                         })
                         .collect();
                     frames.push(pixels);
@@ -71,11 +72,12 @@ impl PaletteEntry {
                 let height = img.height();
                 let bytes = img.into_rgba8().into_raw();
                 let pixels = bytes
-                    .chunks_exact(4)
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
                     .map(|c| match c {
                         [_, _, _, 0] => (0, 0, 0),
                         [r, g, b, _] => (*r, *g, *b),
-                        _ => (0, 0, 0),
                     })
                     .collect();
                 Some(Self::Pattern {
@@ -111,7 +113,7 @@ impl PalettePlayers {
             context::PaletteType::PartyHat,
         ]
         .into_iter()
-        .filter_map(|pty| context::VideoPlayer::new(&ctx).map(move |p| (pty, p)))
+        .filter_map(|pty| context::VideoPlayer::new(ctx).map(move |p| (pty, p)))
         .collect();
         Self { players }
     }
@@ -178,7 +180,7 @@ impl Avatar {
     where
         F: Fn(&fig::Control) -> glam::Mat4 + 'static,
     {
-        let scene = vrm::Scene::new(&ctx, path);
+        let scene = vrm::Scene::new(ctx, path);
         let nodes = scene.nodes.clone();
         Self {
             scene,
@@ -204,8 +206,8 @@ impl Avatar {
         &self,
         ctx: &context::Context,
         shader: &shader::Shader,
-        view: &glam::Mat4,
-        projection: &glam::Mat4,
+        _view: &glam::Mat4,
+        _projection: &glam::Mat4,
         sts: &fig::Control,
     ) {
         let position = (*self.position)(sts);

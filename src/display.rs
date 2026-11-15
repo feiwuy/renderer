@@ -14,10 +14,7 @@ impl Size {
     }
 
     pub fn parse(raw: &str) -> Option<Self> {
-        let parts: Vec<_> = raw
-            .trim()
-            .split(|c| c == 'x' || c == 'X' || c == ',')
-            .collect();
+        let parts: Vec<_> = raw.trim().split(['x', 'X', ',']).collect();
         let (w, h) = match parts.as_slice() {
             [n] => {
                 let n = n.trim().parse::<usize>().ok()?;
