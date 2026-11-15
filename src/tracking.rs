@@ -95,6 +95,12 @@ fn parse_packet(buf: &[u8], sts: &SharedTrackingState, diag: bool, counter: u64,
     {
         return false;
     }
+    // COLONQ_TRACK_DEBUG=1：打印收到的原始数值（前 3 个包 + 之后每 100 个），
+    // 用来确认"包到底有没有到""数值合不合理"
+    if diag && (counter <= 3 || counter % 100 == 0) {
+        log::info!("面捕包 #{}: blink L/R={:.3}/{:.3} mouth={:.3} quat=({:.3},{:.3},{:.3},{:.3})",
+                   counter, left_blinking, right_blinking, mouth_open, quat.0, quat.1, quat.2, quat.3);
+    }
     // 原始四元数的俯仰分量翻转（COLONQ_PITCH_SIGN=-1 修正低头/抬头反向）：
     // OpenSeeFace 的四元数 x 分量主要承载俯仰（pitch），取反即镜像俯仰方向
     let qx = quat.0 * pitch_sign;

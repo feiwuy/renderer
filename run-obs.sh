@@ -51,9 +51,11 @@ export COLONQ_QSIGN="${COLONQ_QSIGN:-1,1,1}"               # 四元数三分量�
 export COLONQ_PITCH_FLIP="${COLONQ_PITCH_FLIP:-1}"         # 俯仰方向反转（点头反向时设 1）
 export COLONQ_TRACK_GAIN="${COLONQ_TRACK_GAIN:-1}"         # 头部旋转幅度增益（1=原始，2~3=明显放大）
 export COLONQ_EXPR_GAIN="${COLONQ_EXPR_GAIN:-1}"           # 眨眼/张嘴幅度增益
-export COLONQ_TRACK_BIND="${COLONQ_TRACK_BIND:-127.0.0.1:11573}"  # 面捕 UDP 绑定：默认只听本机
-# 面捕跑在另一台机器（如 Ubuntu Server）时才需要放开，并务必只放行那台机器的 IP：
-#   COLONQ_TRACK_BIND=0.0.0.0:11573 ./run-obs.sh
+# 面捕 UDP 绑定。**默认收全网卡**：本项目的面捕（OpenSeeFace）跑在局域网里另一台
+# 机器上（见 UBUNTU_FACECAP.md），绑 127.0.0.1 会完全收不到任何数据。
+# 只有把面捕和渲染放在同一台机器上时才改成 127.0.0.1:11573；
+# 共享/不可信网络里建议用防火墙只放行那台面捕机的 IP（UDP 11573）。
+export COLONQ_TRACK_BIND="${COLONQ_TRACK_BIND:-0.0.0.0:11573}"
 
 # ---------- 描边发光 ----------
 # export COLONQ_OUTLINE="${COLONQ_OUTLINE:-0.010}"                    # 描边宽度（世界单位）

@@ -156,7 +156,7 @@ python3 tools/vrm0_to_vrm1_min.py 你的模型.vrm assets/新名字.vrm
 | `COLONQ_GRID` | `128x64` | 内部渲染/推流网格；小终端仅缩放输出，不改变它 |
 | `COLONQ_NO_TERM` | 未设 | 不写 ANSI、无需 TTY；ASCII 推流继续更新 |
 | `| `COLONQ_FLIP` | `1` | 头部旋转补偿翻转：`0`=无、`1`=Z180°、`2`=Y180°、`3`=X180°、`4`=Z+Y、`5`=X+Y、`6`=X+Z |
-| `COLONQ_TRACK_BIND` | `127.0.0.1:11573` | 面捕 UDP 绑定地址；跨机面捕设 `0.0.0.0:11573` 并只对服务器 IP 放行 |
+| `COLONQ_TRACK_BIND` | 程序 `127.0.0.1:11573`；`run-obs.sh` 为 `0.0.0.0:11573` | 面捕 UDP 绑定地址。**面捕跑在局域网另一台机器时必须是 `0.0.0.0:11573`**（否则一个字节都收不到），只有面捕和渲染同机时才用 `127.0.0.1:11573`；共享网络里请用防火墙只放行面捕机 IP |
 | `COLONQ_TRACK_GAIN` | `1` | 面捕头部旋转增益（>1 夸张动作，<1 减小） |
 | `COLONQ_EXPR_GAIN` | `1` | 面捕表情权重增益（blink/oh 放大） |
 | `COLONQ_DUMP_PNG` | 未设 | 保存 `frame64.png`（原始）和 `frame-view.png`（字符比例视图） |

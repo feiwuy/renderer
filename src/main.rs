@@ -622,10 +622,9 @@ fn main() {
         }
     });
 
-    if let Err(e) = tracking::start_receiver(&std::env::var("COLONQ_TRACK_BIND")
-        .unwrap_or_else(|_| "127.0.0.1:11573".into()), shared_tracking_state.clone()) {
-        log::warn!("面捕端口绑定失败：{}，无追踪数据", e);
-    }
+    // 绑定面捕 UDP：失败只 warn、渲染照跑。成功时日志会打印**实际绑定地址**——
+    // 跨机面捕就靠这一行确认到底有没有听在 0.0.0.0 上（见 UBUNTU_FACECAP.md）。
+    tracking::run(shared_tracking_state.clone());
     control.run(command_sender);
 
     render_handle.join().unwrap();
