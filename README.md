@@ -1,6 +1,6 @@
 # renderer（lcolonq/renderer）个人自用分支
 
-> ## 致敬原作者
+> ## 致谢lcolong
 >
 > 本项目的渲染思路、着色器框架、ASCII 调色板方案、面捕数据解析，全部来自
 > **[lcolonq/renderer](https://github.com/lcolonq/renderer)**（作者 **lcolonq / Studio Milkfat**）。
@@ -14,11 +14,11 @@
 > - **不承诺维护**：不保证可用、不一定修 bug、不一定回应 issue 与 PR。
 > - 不少改动是「在我这台机器上成立」的临时方案（Arch + Radeon 780M / RTX 4060、24 fps、
 >   局域网面捕、OBS 浏览器源），换环境可能需要重新校准，见 `FACE_CAPTURE.md` 与 `UBUNTU_FACECAP.md`。
-> - 想要稳定可用的版本，请以**上游仓库**为准。
 >
 > **许可**：上游与本分支同为 **GPL-3.0**（见 `LICENSE`）。若分发本分支的产物，请保留原作者署名，
 > 并同样以 GPL-3.0 开放源代码。
 
+> ## 本分支由AI生成
 ---
 
 ## 它是什么
