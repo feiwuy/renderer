@@ -150,6 +150,32 @@ fn respond(stream: &mut TcpStream, status: &str, kind: &str, body: &str) -> std:
 }
 
 fn handle_sse(mut stream: TcpStream, store: &FrameStore) -> std::io::Result<()> {
+    // 连接/断开都要留痕：OBS 里看不到画面时，先看日志有没有「客户端接入」，
+    // 就能立刻区分是 OBS 没连上（源被关/端口不对/页面缓存）还是渲染/推流本身的问题。
+    let peer = stream
+        .peer_addr()
+        .map(|a| a.to_string())
+        .unwrap_or_else(|_| "?".to_string());
+    log::info!("推流客户端接入: {}", peer);
+    let sent = std::cell::Cell::new(0u64);
+    let result = handle_sse_loop(&mut stream, store, &sent);
+    match &result {
+        Ok(()) => log::info!("推流客户端断开: {}（本次推了 {} 帧）", peer, sent.get()),
+        Err(e) => log::warn!(
+            "推流客户端异常断开: {}（{}，已推 {} 帧）",
+            peer,
+            e,
+            sent.get()
+        ),
+    }
+    result
+}
+
+fn handle_sse_loop(
+    stream: &mut TcpStream,
+    store: &FrameStore,
+    sent: &std::cell::Cell<u64>,
+) -> std::io::Result<()> {
     stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nConnection: keep-alive\r\n\r\n")?;
     let mut last = 0;
     loop {
@@ -173,6 +199,7 @@ fn handle_sse(mut stream: TcpStream, store: &FrameStore) -> std::io::Result<()> 
         let body = state.json.clone();
         drop(state); // Never hold the frame mutex during socket writes.
         write!(stream, "id: {}\ndata: {}\n\n", last, body)?;
+        sent.set(sent.get() + 1);
     }
 }
 
