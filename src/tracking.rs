@@ -561,10 +561,13 @@ pub fn start_receiver(
             utils::env_csv3("COLONQ_QSIGN").unwrap_or((1.0, 1.0, 1.0));
         let pitch_sign: f32 = utils::env_parse("COLONQ_PITCH_SIGN").unwrap_or(qx_sign);
         let mut buf = [0u8; 65535];
+        // 5 秒没收到任何包就提醒一次：绑 127.0.0.1 而后端在另一台机器上，是最容易踩的坑
+        let mut warned_no_packet = false;
         loop {
             match socket.recv_from(&mut buf) {
                 Ok((len, src)) => {
                     counter += 1;
+                    warned_no_packet = false;
                     if !parse_packet(
                         &buf[..len],
                         &sts,
@@ -585,7 +588,18 @@ pub fn start_receiver(
                     if e.kind() == std::io::ErrorKind::WouldBlock
                         || e.kind() == std::io::ErrorKind::TimedOut =>
                 {
-                    continue; // 面捕端暂停时保持接收，等待恢复
+                    // 面捕端暂停时保持接收，等待恢复；但一直一个包都没有就别让人干等
+                    if counter == 0 && !warned_no_packet {
+                        warned_no_packet = true;
+                        log::warn!(
+                            "面捕 {} 上 {} 秒没收到任何 UDP 包。\
+面捕跑在局域网另一台机器时**必须**绑全网卡：COLONQ_TRACK_BIND=0.0.0.0:11573（./run-obs.sh 默认如此）；\
+只有面捕和渲染同机时才用 127.0.0.1:11573。另外确认面捕端在跑、防火墙放行 UDP 11573。",
+                            addr,
+                            5
+                        );
+                    }
+                    continue;
                 }
                 Err(e) => {
                     log::warn!("面捕 UDP 接收失败（{}），停止接收线程", e);

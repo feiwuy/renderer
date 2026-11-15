@@ -50,7 +50,8 @@ export COLONQ_ROT_OFFSET="${COLONQ_ROT_OFFSET:-0,-20,360}" # 三轴静态偏移�
 export COLONQ_QSIGN="${COLONQ_QSIGN:-1,1,1}"               # 四元数三分量符号 x,y,z
 export COLONQ_PITCH_FLIP="${COLONQ_PITCH_FLIP:-1}"         # 俯仰方向反转（点头反向时设 1）
 export COLONQ_TRACK_GAIN="${COLONQ_TRACK_GAIN:-1}"         # 头部旋转幅度增益（1=原始，2~3=明显放大）
-export COLONQ_EXPR_GAIN="${COLONQ_EXPR_GAIN:-1}"           # 眨眼/张嘴幅度增益
+export COLONQ_EXPR_GAIN="${COLONQ_EXPR_GAIN:-1}"           # 表情权重总增益
+# COLONQ_EXPR_GAINS="happy=1.3,aa=0.8,sad=0"      # 逐表情增益（名字见跟踪日志）
 # 面捕 UDP 绑定。**默认收全网卡**：本项目的面捕（OpenSeeFace）跑在局域网里另一台
 # 机器上（见 UBUNTU_FACECAP.md），绑 127.0.0.1 会完全收不到任何数据。
 # 只有把面捕和渲染放在同一台机器上时才改成 127.0.0.1:11573；
@@ -63,7 +64,9 @@ export COLONQ_TRACK_BIND="${COLONQ_TRACK_BIND:-0.0.0.0:11573}"
 # export COLONQ_OUTLINE_GLOW="${COLONQ_OUTLINE_GLOW:-3.0}"            # 发光强度（0=普通描边）
 
 # ---------- 动画与调试 ----------
-export COLONQ_IDLE="${COLONQ_IDLE:1}"             # 待机动画（面捕离线时的摆动）；0=关
+export COLONQ_IDLE="${COLONQ_IDLE:-1}"            # 待机动画（面捕离线时的摆动）；0=关
+#   ↑ 原来是 ${COLONQ_IDLE:1}：这是 bash 的"从第 1 个字符截取"，会得到空串，
+#     意思是"设了也等于没设"，想让待机动画关掉得写 COLONQ_IDLE=0（现在才真生效）
 export COLONQ_TERM_EVERY="${COLONQ_TERM_EVERY:-1}" # 终端刷新间隔帧数（推流模式无影响）
 # export COLONQ_LOG=debug                         # 日志级别：debug/info/warn/error（默认 info）
 export COLONQ_SMOOTH="${COLONQ_SMOOTH:-0.5}"       # 面捕平滑系数（0~0.95，越大越平滑）
@@ -72,6 +75,7 @@ export COLONQ_SMOOTH="${COLONQ_SMOOTH:-0.5}"       # 面捕平滑系数（0~0.95
 # COLONQ_SKIN_TINT / COLONQ_SKIN_SAT                # 皮肤染色
 # COLONQ_TEX_MAX=512                                # 贴图降采样（省内存）
 # COLONQ_TRACK_DEBUG=1                              # 打印面捕原始数据
+# COLONQ_TRACK_DEBUG=2                              # 再打 14 个特征 + 11 个表情权重
 # COLONQ_DUMP_PNG=1 / COLONQ_DUMP_AT=N              # 存帧调试
 
 # Keep model, grid, camera and color settings inherited from the user's environment.
